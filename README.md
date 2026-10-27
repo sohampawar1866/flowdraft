@@ -43,7 +43,7 @@ The extension prompts once before sending dictated text to the API. The service 
 
 ## Deploying the API to Render
 
-`render.yaml` defines one Node web service and one small, free Postgres database for the hackathon. Configure these Render environment variables/secrets:
+`render.yaml` defines one free Node web service and one small, free Postgres database for the hackathon. Configure these Render environment variables/secrets:
 
 - `AWS_REGION` — for example, `us-east-1`.
 - `BEDROCK_MODEL_ID` defaults to `amazon.nova-pro-v1:0`; change it only if you choose another enabled Converse/tool-use model.
@@ -54,6 +54,8 @@ The extension prompts once before sending dictated text to the API. The service 
 The server uses the bearer token directly; it does not need `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` when the bearer token is set. If you use a short-term key, it expires with the AWS session (up to 12 hours), so use a suitable long-term Bedrock API key for a continuously hosted demo or replace the secret when it expires.
 
 The free Render Postgres plan has 1 GB of storage and expires 30 days after creation. Upgrade it before then if you need to keep its data longer.
+
+The free API service normally spins down after 15 minutes without incoming traffic. An external monitor can request `/health` every 10 minutes to keep it warm; occasional scheduler delays or Render maintenance can still cause a cold start. Render includes 750 free service hours per workspace each month, shared across free services. Use a paid always-on plan if dependable no-cold-start availability is more important than keeping hosting free.
 
 After the service is live, set `WXT_API_BASE_URL` to the Render service URL when building the extension. The extension build embeds this public API URL; it does not contain AWS credentials.
 

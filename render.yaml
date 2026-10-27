@@ -2,7 +2,7 @@ services:
   - type: web
     name: wispr-voice-email-api
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm ci && npm run build:api
     startCommand: npm run start:api
     healthCheckPath: /health
