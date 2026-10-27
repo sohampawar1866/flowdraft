@@ -1,0 +1,13 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "types": ["chrome", "vite/client"]
+  },
+  "include": [".wxt/**/*.ts", "entrypoints/**/*.ts", "entrypoints/**/*.tsx", "components/**/*.tsx", "lib/**/*.ts", "wxt.config.ts", "vitest.config.ts"]
+}

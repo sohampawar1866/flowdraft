@@ -1,0 +1,44 @@
+{
+  "name": "flowdraft",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "workspaces": [
+    "apps/extension",
+    "apps/api",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "dev": "npm run dev:extension",
+    "dev:extension": "npm run dev -w @flowdraft/extension",
+    "dev:api": "npm run dev -w @flowdraft/api",
+    "build:contracts": "npm run build -w @flowdraft/contracts",
+    "build:api": "npm run build:contracts && npm run build -w @flowdraft/api",
+    "build:extension": "npm run build:contracts && npm run build -w @flowdraft/extension",
+    "build": "npm run build:api && npm run build:extension",
+    "zip": "npm run build:contracts && npm run zip -w @flowdraft/extension",
+    "typecheck": "npm run build:contracts && npm run typecheck -w @flowdraft/extension && npm run typecheck -w @flowdraft/api",
+    "test": "npm run test -w @flowdraft/extension && npm run test -w @flowdraft/api",
+    "start:api": "npm run start -w @flowdraft/api"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.326",
+    "@types/node": "^22.15.30",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@typescript-eslint/eslint-plugin": "^8.40.0",
+    "@typescript-eslint/parser": "^8.40.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^26.1.0",
+    "tsx": "^4.20.5",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.4",
+    "wxt": "^0.20.6",
+    "@wxt-dev/module-react": "^1.1.3"
+  },
+  "overrides": {
+    "light-my-request": "6.6.0"
+  }
+}
