@@ -1,5 +1,10 @@
+export type UsageReservation =
+  | { status: 'reserved'; installationRequestsUsed: number }
+  | { status: 'installation_limit' }
+  | { status: 'daily_limit'; retryAfterSeconds: number };
+
 export interface UsageStore {
-  reserve(installationId: string): Promise<number | null>;
+  reserve(installationId: string): Promise<UsageReservation>;
 }
 
 export interface ModelInvoker {

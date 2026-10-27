@@ -17,6 +17,8 @@ services:
         sync: false
       - key: BEDROCK_MODEL_ID
         value: amazon.nova-pro-v1:0
+      - key: MAX_DAILY_AI_REQUESTS
+        value: "500"
       - key: AWS_BEARER_TOKEN_BEDROCK
         sync: false
 

@@ -24,7 +24,7 @@ Requirements: Node.js 22.13+, npm, Chrome, and a local Postgres database. For AI
    npm install
    ```
 
-2. Copy `apps/api/.env.example` to `apps/api/.env` and set `DATABASE_URL`, `AWS_REGION`, `BEDROCK_MODEL_ID`, and `AWS_BEARER_TOKEN_BEDROCK`. Start the API; it creates its one-table usage schema on startup:
+2. Copy `apps/api/.env.example` to `apps/api/.env` and set `DATABASE_URL`, `AWS_REGION`, `BEDROCK_MODEL_ID`, and `AWS_BEARER_TOKEN_BEDROCK`. Start the API; it creates its usage tables on startup:
 
    ```sh
    npm run dev:api
@@ -47,6 +47,7 @@ The extension prompts once before sending dictated text to the API. The service 
 
 - `AWS_REGION` — for example, `us-east-1`.
 - `BEDROCK_MODEL_ID` defaults to `amazon.nova-pro-v1:0`; change it only if you choose another enabled Converse/tool-use model.
+- `MAX_DAILY_AI_REQUESTS` defaults to `500`. The same daily UTC cap applies to email parsing and formatting across all installations.
 - `AWS_BEARER_TOKEN_BEDROCK` — your Bedrock API bearer key. Keep it in Render’s secret field; never put it in extension code or commit it.
 - `DATABASE_URL` is supplied automatically by the Postgres resource in the Blueprint; you do not copy or create this connection string yourself.
 - `NODE_ENV=production` is set by the Blueprint.
@@ -70,13 +71,20 @@ npm run build
 npm run zip
 ```
 
+## Download and install a test build
+
+Pushing a version tag such as `v0.1.0` runs the GitHub Actions release workflow. It builds the Chrome extension with the deployed API URL and publishes `flowdraft-chrome.zip` on the matching GitHub Release. The ZIP has `manifest.json` at its root: download it, extract it, open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select the extracted folder. Do not choose the ZIP file itself.
+
+To release a later extension version, update the version in `apps/extension/package.json` and `apps/extension/wxt.config.ts` to match the new `vX.Y.Z` tag, then push that tag. The landing page can link directly to `https://github.com/sohampawar1866/flowdraft/releases/latest/download/flowdraft-chrome.zip` so its download button follows the latest published release.
+
 The API tests use injected fake usage/model dependencies and do not call AWS. A live Gmail trial still needs a Chrome profile, Wispr Flow, a deployed/configured API, Postgres, and an enabled Bedrock model.
 
 ## Product behavior and privacy
 
 - The Gmail content script fills one open compose window, asks which one when several are open, and never finds or clicks Gmail’s Send button.
 - A shared schema package keeps the extension and API aligned on their response formats.
-- Email text is not logged or saved in Postgres. Only a random installation ID and request count are stored.
+- Email text is not logged or saved in Postgres. The database stores random installation IDs, their usage counts, and one aggregate daily request count.
+- Valid AI attempts reserve both the installation allowance and shared daily allowance before calling Bedrock. Failed model calls remain counted because the provider may have processed them; database failures fail closed without calling Bedrock.
 - Browser permissions cover local extension storage, the side panel, the keyboard command and Gmail’s compose surface. There is no Gmail OAuth, mailbox search, background listening or send permission.
 - The first release targets Gmail web in Chrome. Outlook, Apple Mail and other editors are not supported.
 

@@ -5,10 +5,10 @@ import rateLimit from '@fastify/rate-limit';
 import { emailRequestSchema, emailToolSchema, formatRequestSchema, formatToolSchema, normalizeEmailResult, normalizeFormatResult } from './schemas.js';
 import type { AppDependencies } from './types.js';
 
-export function buildApp(dependencies: AppDependencies): FastifyInstance {
+export function buildApp(dependencies: AppDependencies, options: { rateLimitMax?: number } = {}): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });
   void app.register(cors, { origin: true, methods: ['GET', 'POST', 'OPTIONS'] });
-  void app.register(rateLimit, { max: 80, timeWindow: '1 hour' });
+  void app.register(rateLimit, { max: options.rateLimitMax ?? 80, timeWindow: '1 hour' });
 
   app.get('/health', async () => ({ ok: true }));
 
@@ -52,10 +52,17 @@ async function invoke<T extends Omit<EmailParseResponse, 'requestsRemaining'> | 
   try { await dependencies.model.preflight?.(); }
   catch { return reply.code(503).send({ error: 'AI service is not ready. No AI request was made.' }); }
 
-  let requestsUsed: number | null;
-  try { requestsUsed = await dependencies.usage.reserve(installationId); }
+  let reservation;
+  try { reservation = await dependencies.usage.reserve(installationId); }
   catch { return reply.code(503).send({ error: 'Usage service is temporarily unavailable. No AI request was made.' }); }
-  if (requestsUsed === null) return reply.code(429).send({ error: 'You have used all 25 free AI requests for this installation.', requestsRemaining: 0 });
+  if (reservation.status === 'installation_limit') return reply.code(429).send({ error: 'You have used all 25 free AI requests for this installation.', requestsRemaining: 0 });
+  if (reservation.status === 'daily_limit') {
+    return reply.header('Retry-After', String(reservation.retryAfterSeconds)).code(429).send({
+      error: 'The shared daily AI request limit has been reached. Try again after 00:00 UTC.',
+      code: 'DAILY_LIMIT_REACHED',
+    });
+  }
+  const requestsUsed = reservation.installationRequestsUsed;
 
   try {
     const value = await dependencies.model.invoke(input);
