@@ -1,5 +1,5 @@
 import type { ComposeResult, ComposeWindow, EmailDraft } from './messages';
-import type { FormatParseResult } from './api';
+import type { FormatParseResult, VoiceParseResult } from './api';
 
 const COMPOSE_SELECTOR = '[role="dialog"]';
 const BODY_SELECTOR = '[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]';
@@ -26,6 +26,75 @@ export function listComposeWindows(): ComposeWindow[] {
 }
 
 function composeAt(index: number): HTMLElement | undefined { return composeElements()[index]; }
+
+function titleOf(compose: HTMLElement): string {
+  return compose.querySelector<HTMLElement>('[role="heading"], h1, h2, .aYF')?.textContent?.trim()
+    ?? compose.getAttribute('aria-label')
+    ?? '';
+}
+
+export function isNewBlankCompose(compose: HTMLElement): boolean {
+  const recipient = compose.querySelector<HTMLInputElement>('input[name="to"], [name="to"]');
+  const subject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
+  const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+  const title = titleOf(compose);
+  return Boolean(recipient && subject && body)
+    && /^(new message|compose)$/i.test(title)
+    && !recipient?.value.trim()
+    && !subject?.value.trim()
+    && !(body?.textContent ?? '').trim();
+}
+
+export function prepareNewComposeForDictation(): void {
+  for (const compose of composeElements()) {
+    if (!isNewBlankCompose(compose)) continue;
+    const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+    if (!body || compose.dataset.flowdraftFocused === 'true') continue;
+    compose.dataset.flowdraftFocused = 'true';
+    compose.dataset.flowdraftCaptureReady = 'true';
+    body.focus();
+  }
+}
+
+export function newBlankComposeElements(): HTMLElement[] {
+  return composeElements().filter(isNewBlankCompose);
+}
+
+export function captureComposeId(compose: HTMLElement): string {
+  if (!compose.dataset.flowdraftId) compose.dataset.flowdraftId = crypto.randomUUID();
+  return compose.dataset.flowdraftId;
+}
+
+export function isFlowDraftDictation(text: string): boolean {
+  return /\bhey\s+wispr\b/i.test(text)
+    || /^\s*(?:to|recipient)\b[\s\S]{1,500}\bsubject\b[\s\S]{1,500}\b(?:message|body)\b/i.test(text);
+}
+
+export function applyVoiceDraft(composeId: string, transcript: string, result: VoiceParseResult): ComposeResult {
+  const compose = composeElements().find((element) => element.dataset.flowdraftId === composeId);
+  if (!compose) return { ok: false, reason: 'That Gmail message is no longer open. The dictated text was left unchanged.' };
+  if (!result.recipient || result.subject === null || result.body === null) {
+    return { ok: false, reason: result.clarification ?? 'Please include the recipient, subject, and message.' };
+  }
+  const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+  if (!body || normalizeText(body.innerText ?? body.textContent ?? '') !== normalizeText(transcript)) {
+    return { ok: false, reason: 'The Gmail draft changed while I was processing it, so I left it unchanged.' };
+  }
+  const index = composeElements().indexOf(compose);
+  const filled = fillComposeWindow(index, { recipient: result.recipient, subject: result.subject, body: result.body });
+  if (!filled.ok) return filled;
+
+  const skipped: string[] = [];
+  for (const command of result.formatting) {
+    const applied = applyGmailFormatting(index, { ...command, clarification: null, requestsRemaining: result.requestsRemaining } as FormatParseResult);
+    if (!applied.ok) skipped.push(applied.reason);
+  }
+  return skipped.length
+    ? { ok: true, message: `Draft filled. Some formatting was skipped: ${skipped.join(' ')}` }
+    : { ok: true, message: 'Draft filled and voice formatting applied. Review it in Gmail before sending.' };
+}
+
+function normalizeText(text: string): string { return text.replace(/\s+/g, ' ').trim(); }
 
 function setField(element: HTMLElement, selectors: string, value: string): boolean {
   const field = element.querySelector<HTMLInputElement | HTMLElement>(selectors);

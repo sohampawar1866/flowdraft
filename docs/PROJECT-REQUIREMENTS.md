@@ -1,13 +1,13 @@
 # Project Requirements: Voice-First Email Composer
 
-**Status:** Draft concept requirements
+**Status:** Implemented first-release workflow (subject to live Gmail verification)
 **Hackathon:** WeMakeDevs × Wispr Flow
 **Working name:** TBD
 **Current focus:** Gmail compose and voice-based message formatting
 
 ## 1. Product idea
 
-Build a small browser extension that helps people compose and polish an email with Wispr Flow. A user dictates the recipient, subject, and message in one pass. The extension sorts the words into the right email fields. The user can then give a separate voice command to format a line or phrase in the message body.
+Build a small browser extension that helps people compose and polish an email with Wispr Flow. A user dictates the recipient, subject, and message in one pass. The extension sorts the words into the right email fields and can handle inline voice commands to format a line or phrase in the message body.
 
 The extension makes Wispr Flow useful for more than entering a block of text: the user can speak both the content and what should happen to it.
 
@@ -23,13 +23,12 @@ Dictating an email into one field is easy, but composing a complete email often 
 
 ## 4. Main user journey
 
-1. The user installs the extension and opens Gmail.
-2. The user opens a new message and starts the extension’s compose flow.
-3. Using Wispr Flow, the user dictates a message containing the recipient, subject, and body.
-4. The extension places each part in the corresponding Gmail field and shows the draft for review.
-5. The user selects a formatting-command mode and dictates an instruction, such as “bold the line I just spoke” or “bold every ‘Report Card’ in this message.”
-6. The extension applies the requested change to the message body. If the target is unclear, it asks the user to choose rather than guessing.
-7. The user reviews and sends the email themselves.
+1. The user installs the extension, opens its sidebar, and opens a new blank Gmail compose.
+2. FlowDraft focuses the Gmail message body. The user holds Fn and dictates the recipient, subject, and body using clear “To”, “Subject”, and “Message” cues.
+3. In the same dictation, the user can say “Hey Wispr” before a formatting request, such as “make the heading I just said bold” or “bold every ‘Report Card’.”
+4. After Fn is released and Wispr Flow inserts the transcript, the extension sends one request to parse the email and inline formatting commands.
+5. The extension fills the Gmail draft and applies clear formatting commands. If required email fields are unclear, it leaves the transcript in the body and asks for clarification. Unclear formatting is skipped and reported.
+6. The user reviews and sends the email themselves.
 
 ## 5. Functional requirements
 
@@ -37,29 +36,29 @@ Dictating an email into one field is easy, but composing a complete email often 
 
 - **REQ-EMAIL-1:** A user must be able to dictate the recipient, subject, and message body in one composition flow.
 - **REQ-EMAIL-2:** The extension must identify the three parts and place them in the matching fields in the initial supported mail app.
-- **REQ-EMAIL-3:** The user must be able to inspect and correct the fields before sending.
+- **REQ-EMAIL-3:** The extension must fill the open Gmail draft automatically when parsing succeeds; the user must be able to inspect and correct it in Gmail before sending.
 - **REQ-EMAIL-4:** The extension must never send an email without the user’s explicit action in the mail app.
 - **REQ-EMAIL-5:** If the recipient or another required part cannot be understood, the extension must ask for clarification and must not silently guess.
 
 ### Voice formatting
 
-- **REQ-FORMAT-1:** The user must have a clear way to enter formatting-command mode, separate from ordinary email dictation.
-- **REQ-FORMAT-2:** The initial command set should focus on simple message-body formatting, such as bold, italic, alignment, and lists. The exact first-release commands remain to be selected.
+- **REQ-FORMAT-1:** The user can issue inline formatting commands during the same dictation by saying the reserved “Hey Wispr” marker; a separate key or input box is not required.
+- **REQ-FORMAT-2:** The first-release command set is bold, italic, center alignment, and bullets.
 - **REQ-FORMAT-3:** The user must be able to refer to the most recently dictated line or paragraph, an exact phrase already in the body, or all occurrences of an exact phrase.
-- **REQ-FORMAT-4:** Commands such as “bold every ‘Report Card’” must apply to all matching text in the message body. A request without “every” must not silently change multiple matches; the extension should ask which occurrence the user means.
+- **REQ-FORMAT-4:** Commands such as “bold every ‘Report Card’” apply to all matching text in the message body. A request without “every” must not silently change multiple matches; the extension skips that formatting and explains that the phrase is ambiguous.
 - **REQ-FORMAT-5:** Formatting commands must not change the recipient or subject fields.
-- **REQ-FORMAT-6:** The extension must show the user what it changed and allow a correction or undo where practical.
+- **REQ-FORMAT-6:** The extension reports whether formatting was applied or skipped. The user can correct the draft in Gmail before sending.
 
 ### Wispr Flow use
 
 - **REQ-FLOW-1:** Wispr Flow must be the voice-input method used in the demonstrated workflow.
-- **REQ-FLOW-2:** The user should dictate into a clearly identified extension input or command mode so spoken instructions are not accidentally inserted into the email body.
+- **REQ-FLOW-2:** The user dictates into the Gmail message body. The extension recognizes clear email cues and the reserved formatting marker in Wispr Flow’s inserted text.
 - **REQ-FLOW-3:** The product must not claim that Wispr Flow itself parses email fields or performs formatting. The extension interprets the dictated text and applies the requested action.
 
 ### Trial and privacy
 
 - **REQ-TRIAL-1:** Judges should be able to try the extension without connecting multiple services or providing AWS credentials.
-- **REQ-TRIAL-2:** The proposed no-login trial allowance is approximately 20–30 email drafts per user. The exact limit and how a user is identified are open decisions.
+- **REQ-TRIAL-2:** The no-login allowance is 25 AI requests per extension installation, with a shared daily service cap. The sidebar shows the server-reported remaining installation allowance.
 - **REQ-PRIVACY-1:** Users must be told when dictated email content is sent for processing.
 - **REQ-PRIVACY-2:** Email contents should not be retained after processing unless the user explicitly chooses to save them.
 - **REQ-PRIVACY-3:** Any AI service credentials must remain outside the browser extension.
@@ -68,8 +67,8 @@ Dictating an email into one field is easy, but composing a complete email often 
 
 The two-minute demo should tell one connected story: **speak an email, then polish it by voice.**
 
-- **First minute:** In Gmail, dictate a recipient, subject, and message. Show the extension placing them into the correct fields, then review the draft.
-- **Second minute:** Issue a formatting command for a line just dictated or an exact phrase in the body. Show the result and explain how ambiguous targets are handled.
+- **First minute:** In Gmail, hold Fn and dictate a recipient, subject, and message. Show FlowDraft routing them into the correct fields, then review the draft.
+- **Second minute:** In that same dictation, say “Hey Wispr” and ask to format the heading or an exact phrase. Show the formatted result and explain how unclear targets are handled.
 - The demo may claim support for another mail app only after that app has been implemented and tested. Gmail is the initial target; Outlook and Apple Mail are possible later targets, not current support commitments.
 
 ## 7. Scope boundaries
@@ -81,31 +80,29 @@ The two-minute demo should tell one connected story: **speak an email, then poli
 - Voice-dictated recipient, subject, and message body.
 - A small, explicit set of voice formatting commands for the message body.
 - A user review step before sending.
+- Automatic focus of new blank Gmail composers for Flow-based dictation.
+- Inline formatting requests introduced by “Hey Wispr” in the same dictation.
 
 ### Not in the initial scope
 
 - Automatically sending email.
 - Claiming universal support for Gmail, Outlook, Apple Mail, and other clients before testing each one.
 - Google Docs or general-purpose document editing.
-- A wake word or always-listening assistant.
+- Microphone access, audio capture, or an always-listening assistant. The extension processes only text inserted by Wispr Flow.
 - Unbounded AI access or unlimited free usage.
 
 ## 8. Product principles
 
 - **One setup:** The judge should install the extension once and use the mail app they already have open.
 - **User stays in control:** The extension prepares and edits a draft; the user decides whether to send it.
-- **Be explicit:** The user can tell whether they are dictating email content or issuing a formatting command.
+- **Be explicit:** “Hey Wispr” marks a formatting instruction; other dictated words remain email content.
 - **Do not guess silently:** Ask when recipients, targets, or formatting scope are unclear.
 - **Show real support honestly:** Only describe integrations and commands that have been tested.
 
 ## 9. Open decisions
 
-- Which browser and Gmail experience will be supported first (for example, Gmail in Chrome)?
-- What exact spoken format should separate recipient, subject, and body while still feeling natural?
-- Which formatting commands are reliable and useful enough for the first demo?
-- Should formatting commands use a dedicated extension command box, a visible mode switch, or another clear interaction?
-- Is Bedrock needed for natural-language field extraction, or can the first version use a constrained parser?
-- What exact trial limit should be used, and what no-login mechanism should track it? IP address alone should not be treated as a reliable person identifier.
+- Live verification is still needed to confirm Wispr Flow inserts dictated text through a paste event in the supported Gmail/Chrome setup.
+- Which additional mail apps, if any, should be supported after the Gmail release?
 - Should later mail-app support use a separate integration for each app, or a more general draft handoff?
 
 ## 10. Success criteria

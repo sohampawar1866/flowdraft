@@ -8,6 +8,14 @@ export class PostgresUsageStore implements UsageStore {
     }
   }
 
+  async getRemaining(installationId: string): Promise<number> {
+    const result = await this.pool.query<{ requests_used: number }>(
+      'SELECT requests_used FROM installations WHERE installation_id = $1',
+      [installationId],
+    );
+    return Math.max(0, 25 - (result.rows[0]?.requests_used ?? 0));
+  }
+
   async reserve(installationId: string) {
     const client = await this.pool.connect();
     let transactionOpen = false;

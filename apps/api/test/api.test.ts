@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type { AppDependencies, UsageReservation } from '../src/types.js';
-import { normalizeEmailResult, normalizeFormatResult } from '../src/schemas.js';
+import { normalizeEmailResult, normalizeFormatResult, normalizeVoiceResult } from '../src/schemas.js';
 
 const install = '3bd75295-8374-4ad9-9b66-522437a589bf';
 const email = { recipient: 'sam@example.com', subject: 'Update', body: 'Hi Sam', clarification: null };
@@ -37,6 +37,21 @@ describe('safe model result normalization', () => {
       action: 'bold', target: { kind: 'last-paragraph' }, clarification: null,
     });
   });
+
+  it('normalizes voice email fields and inline command targets', () => {
+    expect(normalizeVoiceResult({
+      recipient: 'sam@example.com', subject: 'Update', body: 'Quarterly update',
+      formatting: [{ action: 'bold', target: { kind: 'phrase', text: 'Quarterly update', all: false } }],
+      clarification: null,
+    })).toMatchObject({ recipient: 'sam@example.com', formatting: [{ action: 'bold', target: { text: 'Quarterly update' } }] });
+  });
+
+  it('rejects a response that leaves the reserved voice marker in the final body', () => {
+    expect(normalizeVoiceResult({
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hey Wispr make that bold',
+      formatting: [], clarification: null,
+    })).toBeNull();
+  });
 });
 
 describe('AI routes and shared quota', () => {
@@ -48,6 +63,48 @@ describe('AI routes and shared quota', () => {
     const response = await app.inject({ method: 'POST', url: '/v1/email/parse', payload: emailRequest });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ...email, requestsRemaining: 24 });
+    expect(model.invoke).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('returns the authoritative installation allowance without calling Bedrock', async () => {
+    const { deps, usage, model } = dependencies({ usage: {
+      reserve: vi.fn(async () => reserved()),
+      getRemaining: vi.fn(async () => 17),
+    } });
+    const app = buildApp(deps);
+    const response = await app.inject({ method: 'GET', url: `/v1/usage?installationId=${install}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ requestsRemaining: 17 });
+    expect(usage.reserve).not.toHaveBeenCalled();
+    expect(model.invoke).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('rejects an invalid installation ID on the usage endpoint', async () => {
+    const { deps } = dependencies();
+    const app = buildApp(deps);
+    const response = await app.inject({ method: 'GET', url: '/v1/usage?installationId=bad' });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('parses a whole email and inline formatting in one reserved model request', async () => {
+    const voiceResult = {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Quarterly update\nThe launch is Friday.',
+      formatting: [{ action: 'bold', target: { kind: 'phrase', text: 'Quarterly update', all: false } }],
+      clarification: null,
+    };
+    const model = { invoke: vi.fn(async () => voiceResult) };
+    const { deps, usage } = dependencies({ model });
+    const app = buildApp(deps);
+    const response = await app.inject({
+      method: 'POST', url: '/v1/voice/parse',
+      payload: { installationId: install, transcript: 'To sam@example.com. Subject update. Message Quarterly update. Hey Wispr make that heading bold. The launch is Friday.' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ...voiceResult, requestsRemaining: 24 });
+    expect(usage.reserve).toHaveBeenCalledOnce();
     expect(model.invoke).toHaveBeenCalledOnce();
     await app.close();
   });

@@ -5,6 +5,7 @@ export type UsageReservation =
 
 export interface UsageStore {
   reserve(installationId: string): Promise<UsageReservation>;
+  getRemaining(installationId: string): Promise<number>;
 }
 
 export interface ModelInvoker {

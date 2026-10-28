@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyGmailFormatting, fillComposeWindow, listComposeWindows } from './gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, isFlowDraftDictation, isNewBlankCompose, listComposeWindows, prepareNewComposeForDictation } from './gmail-dom';
+import type { VoiceParseResult } from './api';
 
 function createCompose({ recipient = '', subject = '', body = '' } = {}) {
   const dialog = document.createElement('div');
   dialog.setAttribute('role', 'dialog');
-  dialog.innerHTML = `<input name="to" value="${recipient}"><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
+  dialog.innerHTML = `<div role="heading">New Message</div><input name="to" value="${recipient}"><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
   const messageBody = dialog.querySelector('[aria-label="Message Body"]')!;
   for (const line of body.split('\n')) {
     const paragraph = document.createElement('div');
@@ -84,5 +85,60 @@ describe('Gmail compose bridge', () => {
     expect(fillComposeWindow(0, { recipient: 'a@example.com', subject: 'Hi', body: 'Hello' })).toEqual({
       ok: false, reason: 'That compose window is no longer open. Reopen the draft picker and try again.',
     });
+  });
+
+  it('recognizes only clear FlowDraft email cues or the reserved spoken command marker', () => {
+    expect(isFlowDraftDictation('To sam@example.com. Subject: Update. Message: Hello.')).toBe(true);
+    expect(isFlowDraftDictation('Quarterly update. Hey Wispr, make that bold.')).toBe(true);
+    expect(isFlowDraftDictation('Please send me the project notes.')).toBe(false);
+  });
+
+  it('auto-focuses the body of a new blank compose and leaves non-new messages alone', () => {
+    const dialog = createCompose();
+    expect(isNewBlankCompose(dialog)).toBe(true);
+    prepareNewComposeForDictation();
+    expect(document.activeElement).toBe(dialog.querySelector('[aria-label="Message Body"]'));
+
+    const reply = createCompose();
+    reply.querySelector('[role="heading"]')!.textContent = 'Reply';
+    expect(isNewBlankCompose(reply)).toBe(false);
+  });
+
+  it('routes one dictation and applies inline formatting after verifying the transcript is unchanged', () => {
+    const dialog = createCompose();
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const transcript = 'To sam@example.com. Subject: Update. Message: Quarterly update';
+    body.textContent = transcript;
+    const composeId = captureComposeId(dialog);
+    const format = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: format });
+    const response = {
+      recipient: 'sam@example.com',
+      subject: 'Update',
+      body: 'Quarterly update',
+      formatting: [{ action: 'bold', target: { kind: 'phrase', text: 'Quarterly update', all: false } }],
+      clarification: null,
+      requestsRemaining: 24,
+    } satisfies VoiceParseResult;
+    const result = applyVoiceDraft(composeId, transcript, response);
+    expect(result.ok).toBe(true);
+    expect(dialog.querySelector<HTMLInputElement>('input[name="to"]')!.value).toBe('sam@example.com');
+    expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
+    expect(body.textContent).toContain('Quarterly update');
+    expect(body.textContent).not.toContain('Hey Wispr');
+    expect(format).toHaveBeenCalledWith('bold');
+  });
+
+  it('leaves Gmail untouched if the user changed the pasted text during AI processing', () => {
+    const dialog = createCompose();
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    body.textContent = 'Edited while processing';
+    const response = {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult;
+    const before = dialog.innerHTML;
+    const result = applyVoiceDraft(captureComposeId(dialog), 'Original transcript', response);
+    expect(result.ok).toBe(false);
+    expect(dialog.innerHTML).toBe(before);
   });
 });

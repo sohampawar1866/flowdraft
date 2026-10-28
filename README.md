@@ -1,6 +1,6 @@
 # FlowDraft for Gmail
 
-FlowDraft is a Chrome side-panel extension that helps a Wispr Flow user dictate a complete Gmail draft, review the recipient, subject and message, then apply a small formatting command by voice. It never sends email.
+FlowDraft is a Chrome side-panel extension that lets Wispr Flow users dictate a complete Gmail draft and include spoken formatting commands in the same dictation. It fills the draft for review and never sends email.
 
 ## Repository layout
 
@@ -37,9 +37,9 @@ Requirements: Node.js 22.13+, npm, Chrome, and a local Postgres database. For AI
    ```
 
 4. In Chrome, open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `apps/extension/.output/chrome-mv3`.
-5. Open Gmail, start a new message, open the extension from Chrome’s toolbar, and dictate in its compose box with Wispr Flow.
+5. Open Gmail, open FlowDraft from Chrome’s toolbar, and start a new blank compose. FlowDraft focuses the message body. Hold Fn and dictate the recipient, subject, and message using “To”, “Subject”, and “Message” cues. Say “Hey Wispr” before a formatting instruction, then release Fn.
 
-The extension prompts once before sending dictated text to the API. The service uses Bedrock for field extraction and command interpretation; the browser alone performs Gmail edits.
+The extension prompts once before sending dictated text to the API. The service uses Bedrock to extract email fields and inline formatting commands in one request; the browser alone performs Gmail edits. Review the completed draft and send it using Gmail.
 
 ## Deploying the API to Render
 
@@ -81,11 +81,11 @@ The API tests use injected fake usage/model dependencies and do not call AWS. A 
 
 ## Product behavior and privacy
 
-- The Gmail content script fills one open compose window, asks which one when several are open, and never finds or clicks Gmail’s Send button.
+- The Gmail content script auto-focuses the body of a new blank compose and only processes a paste with explicit email cues or the reserved “Hey Wispr” marker. It fills and formats the draft and never finds or clicks Gmail’s Send button.
 - A shared schema package keeps the extension and API aligned on their response formats.
 - Email text is not logged or saved in Postgres. The database stores random installation IDs, their usage counts, and one aggregate daily request count.
 - Valid AI attempts reserve both the installation allowance and shared daily allowance before calling Bedrock. Failed model calls remain counted because the provider may have processed them; database failures fail closed without calling Bedrock.
-- Browser permissions cover local extension storage, the side panel, the keyboard command and Gmail’s compose surface. There is no Gmail OAuth, mailbox search, background listening or send permission.
+- Browser permissions cover local extension storage, the side panel, the keyboard command and Gmail’s compose surface. There is no Gmail OAuth, mailbox search, microphone access, background audio listening or send permission.
 - The first release targets Gmail web in Chrome. Outlook, Apple Mail and other editors are not supported.
 
 The request allowance is associated with an installation UUID, not a verified person. Reinstalling or clearing extension storage may reset it. IP rate limiting is supplementary abuse protection and does not establish a person’s identity.

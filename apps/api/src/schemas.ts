@@ -17,6 +17,11 @@ export const emailResultSchema = z.object({
   clarification: z.string().trim().max(500).nullable(),
 });
 
+export const voiceRequestSchema = z.object({
+  installationId: z.uuid(),
+  transcript: z.string().trim().min(8).max(12000),
+}).strict();
+
 export const formatResultSchema = z.object({
   action: z.enum(['bold', 'italic', 'center', 'bullets']),
   target: z.discriminatedUnion('kind', [
@@ -26,8 +31,20 @@ export const formatResultSchema = z.object({
   clarification: z.string().trim().max(500).nullable(),
 });
 
+export const voiceResultSchema = z.object({
+  recipient: z.string().trim().max(254).nullable(),
+  subject: z.string().trim().max(998).nullable(),
+  body: z.string().max(10000).nullable(),
+  formatting: z.array(z.object({
+    action: z.enum(['bold', 'italic', 'center', 'bullets']),
+    target: z.object({ kind: z.literal('phrase'), text: z.string().trim().min(1).max(160), all: z.boolean() }).strict(),
+  }).strict()).max(8),
+  clarification: z.string().trim().max(500).nullable(),
+});
+
 export type EmailResult = z.infer<typeof emailResultSchema>;
 export type FormatResult = z.infer<typeof formatResultSchema>;
+export type VoiceResult = z.infer<typeof voiceResultSchema>;
 
 export function normalizeEmailResult(value: unknown): EmailResult | null {
   const parsed = emailResultSchema.safeParse(value);
@@ -61,6 +78,22 @@ export function normalizeFormatResult(value: unknown): FormatResult | null {
   return parsed.success ? parsed.data : null;
 }
 
+export function normalizeVoiceResult(value: unknown): VoiceResult | null {
+  const parsed = voiceResultSchema.safeParse(value);
+  if (!parsed.success) return null;
+  let result = parsed.data;
+  if (result.recipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result.recipient)) {
+    result = { ...result, recipient: null, clarification: result.clarification ?? 'Please dictate the recipient’s complete email address.' };
+  }
+  const missing: string[] = [];
+  if (!result.recipient) missing.push('recipient email address');
+  if (!result.subject) missing.push('subject');
+  if (!result.body) missing.push('message');
+  if (missing.length && !result.clarification) result = { ...result, clarification: `Please clarify the ${missing.join(', ')}.` };
+  if (/hey\s+wispr/i.test(result.body ?? '')) return null;
+  return result;
+}
+
 export const emailToolSchema: Record<string, unknown> = {
   type: 'object', additionalProperties: false,
   properties: {
@@ -85,4 +118,31 @@ export const formatToolSchema: Record<string, unknown> = {
     },
     clarification: { type: ['string', 'null'] },
   }, required: ['action', 'target', 'clarification'],
+};
+
+export const voiceToolSchema: Record<string, unknown> = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    recipient: { type: ['string', 'null'], description: 'One complete recipient email address, or null if missing or unclear.' },
+    subject: { type: ['string', 'null'], description: 'The email subject, or null if missing or unclear.' },
+    body: { type: ['string', 'null'], description: 'Email body only. Exclude all Hey Wispr markers and their spoken formatting instructions. Preserve wording and paragraph breaks.' },
+    formatting: {
+      type: 'array', maxItems: 8,
+      items: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          action: { type: 'string', enum: ['bold', 'italic', 'center', 'bullets'] },
+          target: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              kind: { type: 'string', enum: ['phrase'] },
+              text: { type: 'string', description: 'Exact body text to format; use the exact preceding heading/line when a command says “what I just said”.' },
+              all: { type: 'boolean', description: 'True only when every/all occurrences are explicitly requested.' },
+            }, required: ['kind', 'text', 'all'],
+          },
+        }, required: ['action', 'target'],
+      },
+    },
+    clarification: { type: ['string', 'null'], description: 'Ask for missing or unclear email fields, or explain unclear formatting.' },
+  }, required: ['recipient', 'subject', 'body', 'formatting', 'clarification'],
 };
