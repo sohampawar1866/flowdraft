@@ -160,14 +160,25 @@ export function captureComposeId(compose: HTMLElement): string {
 }
 
 export function isFlowDraftDictation(text: string): boolean {
-  const hasAddress = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
-  const hasSubjectCue = /\b(?:subject(?:\s+line)?\s*(?::|is\b|will be\b|should be\b)|with the subject\b|subject is regarding\b)/i.test(text);
-  const hasCompleteLabels = /^\s*(?:to|recipient)\b[\s\S]{1,500}\bsubject\b[\s\S]{1,500}\b(?:message|body)\b/i.test(text);
+  const addresses = Array.from(text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi));
+  if (!addresses.length) return false;
 
-  // This check runs only for a newly opened, blank Gmail compose. Requiring an
-  // address and subject cue keeps ordinary dictation and unrelated pastes out
-  // of the AI path while allowing different natural ways to give the fields.
-  return hasAddress && (hasSubjectCue || hasCompleteLabels);
+  // This is a low-cost prefilter, not the parser. Only a new blank compose is
+  // considered by the caller; require an address near an email/recipient cue,
+  // but deliberately don't require a subject so Bedrock can ask for one.
+  return addresses.some((address) => {
+    const leadIn = text.slice(Math.max(0, (address.index ?? 0) - 180), address.index);
+    const explicitRecipient = /\b(?:to|for|recipient|email address)\s*(?:is|:)?\s*$/i.test(leadIn)
+      || /\b(?:send|write|draft|compose|email|mail)\b[\s\S]{0,120}\b(?:to|for)\s*$/i.test(leadIn);
+    return explicitRecipient;
+  }) || /\b(?:send|write|draft|compose)\b.{0,80}\b(?:email|mail)\b.{0,40}\bto\b/i.test(text);
+}
+
+export function isWisprStyleInsertion(event: Event, recentPaste = false): boolean {
+  const inputEvent = event as InputEvent;
+  return event.type === 'paste' || event.type === 'drop' || recentPaste
+    || ['insertFromPaste', 'insertFromDrop', 'insertReplacementText'].includes(inputEvent.inputType ?? '')
+    || (typeof inputEvent.data === 'string' && inputEvent.data.trim().length >= 24);
 }
 
 export function composeBodyText(body: HTMLElement): string {
@@ -194,7 +205,7 @@ export function showComposeVoiceStatus(composeId: string, status: string, text: 
   notice.style.color = status === 'error' ? '#7b241c' : '#333';
 }
 
-export function applyVoiceDraft(composeId: string, transcript: string, result: VoiceParseResult): ComposeResult {
+export async function applyVoiceDraft(composeId: string, transcript: string, result: VoiceParseResult): Promise<ComposeResult> {
   const compose = composeElements().find((element) => element.dataset.flowdraftId === composeId);
   if (!compose) return { ok: false, reason: 'That Gmail message is no longer open. The dictated text was left unchanged.' };
   if (!result.recipient?.trim() || !result.subject?.trim() || !result.body?.trim()) {
@@ -204,9 +215,33 @@ export function applyVoiceDraft(composeId: string, transcript: string, result: V
   if (!body || normalizeText(body.innerText ?? body.textContent ?? '') !== normalizeText(transcript)) {
     return { ok: false, reason: 'The Gmail draft changed while I was processing it, so I left it unchanged.' };
   }
+  if (!isNewComposeReadyForDictation(compose)) {
+    return { ok: false, reason: 'This is no longer a blank new message. I left the Gmail draft unchanged.' };
+  }
+  const originalBody = body.innerHTML;
+  const subject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
+  if (!subject) return { ok: false, reason: 'Gmail changed its compose layout. Your dictated text is still there.' };
+  const originalSubject = subject.value;
   const index = composeElements().indexOf(compose);
   const filled = fillComposeWindow(index, { recipient: result.recipient, subject: result.subject, body: result.body });
-  if (!filled.ok) return filled;
+  if (!filled.ok) {
+    restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient);
+    return { ok: false, reason: `${filled.reason} Your dictated text was restored.` };
+  }
+
+  // Let Gmail's own event handlers commit the recipient chip before checking
+  // the rendered compose. A successful DOM write alone is not confirmation.
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  const recipientContainer = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
+  const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
+  const appliedBody = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+  const committedRecipient = Boolean(recipientContainer && recipientInput && !recipientInput.value.trim()
+    && recipientContainer.textContent?.toLowerCase().includes(result.recipient!.toLowerCase()));
+  if (!committedRecipient || subject.value !== result.subject
+    || !appliedBody || normalizeText(composeBodyText(appliedBody)) !== normalizeText(result.body)) {
+    restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient);
+    return { ok: false, reason: 'Gmail did not confirm all draft fields. I restored your dictated text so you can retry.' };
+  }
 
   const skipped: string[] = [];
   for (const command of result.formatting) {
@@ -216,6 +251,28 @@ export function applyVoiceDraft(composeId: string, transcript: string, result: V
   return skipped.length
     ? { ok: true, message: `Draft filled. Some formatting was skipped: ${skipped.join(' ')}` }
     : { ok: true, message: 'Draft filled and voice formatting applied. Review it in Gmail before sending.' };
+}
+
+function restoreVoiceCompose(compose: HTMLElement, originalBody: string, originalSubject: string, recipient: string): void {
+  const recipientContainer = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
+  const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
+  if (recipientInput) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(recipientInput, '');
+    recipientInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    recipientInput.dispatchEvent(new Event('change', { bubbles: true }));
+    const chip = Array.from(recipientContainer?.children ?? []).find((child) =>
+      !child.contains(recipientInput) && child.textContent?.toLowerCase().includes(recipient.toLowerCase()),
+    );
+    chip?.remove();
+  }
+  setField(compose, 'input[name="subjectbox"], [name="subjectbox"]', originalSubject);
+  const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+  if (body) {
+    body.innerHTML = originalBody;
+    body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: composeBodyText(body) }));
+    body.dispatchEvent(new Event('change', { bubbles: true }));
+  }
 }
 
 function normalizeText(text: string): string { return text.replace(/\s+/g, ' ').trim(); }

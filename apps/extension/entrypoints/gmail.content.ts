@@ -1,7 +1,8 @@
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, composeBodyText, isFlowDraftDictation, isNewComposeReadyForDictation, listComposeWindows, newBlankComposeElements, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback, fillComposeWindow } from '@/lib/gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, composeBodyText, isFlowDraftDictation, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, newBlankComposeElements, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback, fillComposeWindow } from '@/lib/gmail-dom';
 import type { ApplyFormatMessage, ApplyVoiceResultMessage, CapturedDictationMessage, FillDraftMessage, ListComposeMessage, VoiceStatusMessage } from '@/lib/messages';
 
 const DICTATION_QUIET_MS = 1100;
+const PASTE_INSERTION_WINDOW_MS = 2000;
 
 export default defineContentScript({
   matches: ['https://mail.google.com/*'],
@@ -10,6 +11,7 @@ export default defineContentScript({
     const observedBodies = new WeakSet<HTMLElement>();
     const cancelFocusRetries = new WeakMap<HTMLElement, () => void>();
     const captureTimers = new WeakMap<HTMLElement, number>();
+    const pasteWindows = new WeakMap<HTMLElement, number>();
     const observeComposes = () => {
       for (const compose of newBlankComposeElements()) {
         const body = compose.querySelector<HTMLElement>('[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]');
@@ -18,7 +20,12 @@ export default defineContentScript({
           observedBodies.add(body);
           captureComposeId(compose);
           compose.dataset.flowdraftCaptureReady = 'true';
-          const scheduleCapture = () => {
+          const scheduleCapture = (event: Event) => {
+            const now = Date.now();
+            if (event.type === 'paste' || event.type === 'drop') {
+              pasteWindows.set(body, now + PASTE_INSERTION_WINDOW_MS);
+            }
+            if (!isWisprStyleInsertion(event, (pasteWindows.get(body) ?? 0) >= now)) return;
             cancelFocusRetries.get(compose)?.();
             if (compose.dataset.flowdraftCaptureReady !== 'true' || compose.dataset.flowdraftProcessing === 'true') return;
             const previous = captureTimers.get(body);
@@ -40,6 +47,8 @@ export default defineContentScript({
             captureTimers.set(body, timer);
           };
           body.addEventListener('paste', scheduleCapture, true);
+          body.addEventListener('drop', scheduleCapture, true);
+          body.addEventListener('beforeinput', scheduleCapture, true);
           body.addEventListener('input', scheduleCapture, true);
         }
         if (!compose.dataset.flowdraftFocusState) {
@@ -65,10 +74,14 @@ export default defineContentScript({
         return;
       }
       if (isApplyVoiceResult(message)) {
-        sendResponse(applyVoiceDraft(message.composeId, message.transcript, message.result));
+        void applyVoiceDraft(message.composeId, message.transcript, message.result).then(sendResponse);
         return true;
       }
       if (isVoiceStatus(message) && message.composeId) {
+        const compose = composeElementsForStatus().find((element) => element.dataset.flowdraftId === message.composeId);
+        if (compose && (message.status === 'clarification' || message.status === 'error' || message.status === 'success')) {
+          compose.dataset.flowdraftProcessing = 'false';
+        }
         showComposeVoiceStatus(message.composeId, message.status, message.text);
         return;
       }
@@ -76,6 +89,12 @@ export default defineContentScript({
     });
   },
 });
+
+function composeElementsForStatus(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).filter((dialog) =>
+    dialog.querySelector('[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]'),
+  );
+}
 
 function isListCompose(value: unknown): value is ListComposeMessage {
   return typeof value === 'object' && value !== null && 'type' in value && value.type === 'LIST_COMPOSES';

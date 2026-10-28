@@ -78,7 +78,7 @@ export function normalizeFormatResult(value: unknown): FormatResult | null {
   return parsed.success ? parsed.data : null;
 }
 
-export function normalizeVoiceResult(value: unknown): VoiceResult | null {
+export function normalizeVoiceResult(value: unknown, transcript: string): VoiceResult | null {
   const parsed = voiceResultSchema.safeParse(value);
   if (!parsed.success) return null;
   let result = {
@@ -87,15 +87,34 @@ export function normalizeVoiceResult(value: unknown): VoiceResult | null {
     subject: parsed.data.subject?.trim() || null,
     body: parsed.data.body?.trim() || null,
   };
+  if (/\bhey\s+wispr(?:\s+flow)?\b/i.test(result.body ?? '')) {
+    result = {
+      ...result,
+      body: null,
+      clarification: result.clarification ?? 'I could not safely separate the formatting command from the message. Please repeat the dictation with “Hey Wispr” or “Hey Wispr Flow” before the command.',
+    };
+  }
   if (result.recipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result.recipient)) {
     result = { ...result, recipient: null, clarification: result.clarification ?? 'Please dictate the recipient’s complete email address.' };
+  }
+  const transcriptAddresses = Array.from(new Set(
+    Array.from(transcript.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi), (match) => match[0].toLowerCase()),
+  ));
+  if (transcriptAddresses.length !== 1 || !result.recipient
+    || transcriptAddresses[0] !== result.recipient.toLowerCase()) {
+    result = {
+      ...result,
+      recipient: null,
+      clarification: result.clarification ?? (transcriptAddresses.length > 1
+        ? 'Please dictate one clear recipient email address.'
+        : 'Please dictate the recipient’s complete email address.'),
+    };
   }
   const missing: string[] = [];
   if (!result.recipient) missing.push('recipient email address');
   if (!result.subject) missing.push('subject');
   if (!result.body) missing.push('message');
   if (missing.length && !result.clarification) result = { ...result, clarification: `Please clarify the ${missing.join(', ')}.` };
-  if (/hey\s+wispr/i.test(result.body ?? '')) return null;
   return result;
 }
 

@@ -25,7 +25,7 @@ export class BedrockModelInvoker implements ModelInvoker {
         } }],
         toolChoice: { tool: { name: input.toolName } },
       },
-      inferenceConfig: { maxTokens: 800, temperature: 0 },
+      inferenceConfig: { maxTokens: 3000, temperature: 0 },
     }));
     const toolUse = response.output?.message?.content?.find((item) => item.toolUse)?.toolUse;
     if (!toolUse || toolUse.name !== input.toolName || typeof toolUse.input !== 'object' || toolUse.input === null) {

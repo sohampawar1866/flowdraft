@@ -43,23 +43,42 @@ describe('safe model result normalization', () => {
       recipient: 'sam@example.com', subject: 'Update', body: 'Quarterly update',
       formatting: [{ action: 'bold', target: { kind: 'phrase', text: 'Quarterly update', all: false } }],
       clarification: null,
-    })).toMatchObject({ recipient: 'sam@example.com', formatting: [{ action: 'bold', target: { text: 'Quarterly update' } }] });
+    }, 'Send mail to sam@example.com. Subject Update. Message Quarterly update.')).toMatchObject({ recipient: 'sam@example.com', formatting: [{ action: 'bold', target: { text: 'Quarterly update' } }] });
   });
 
-  it('rejects a response that leaves the reserved voice marker in the final body', () => {
+  it('asks for clarification when the model leaves a reserved voice marker in the final body', () => {
     expect(normalizeVoiceResult({
       recipient: 'sam@example.com', subject: 'Update', body: 'Hey Wispr make that bold',
       formatting: [], clarification: null,
-    })).toBeNull();
+    }, 'Send mail to sam@example.com. Subject Update. Message Hey Wispr make that bold.')).toMatchObject({
+      recipient: 'sam@example.com', body: null,
+      clarification: expect.stringContaining('safely separate the formatting command'),
+    });
+    expect(normalizeVoiceResult({
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hey Wispr Flow make that bold',
+      formatting: [], clarification: null,
+    }, 'Send mail to sam@example.com. Subject Update. Message Hey Wispr Flow make that bold.')).toMatchObject({ body: null });
   });
 
   it('treats empty required voice fields as missing so the raw transcript is preserved for clarification', () => {
     expect(normalizeVoiceResult({
       recipient: 'sam@example.com', subject: '   ', body: '', formatting: [], clarification: null,
-    })).toMatchObject({
+    }, 'Send mail to sam@example.com. Subject update.')).toMatchObject({
       recipient: 'sam@example.com', subject: null, body: null,
       clarification: 'Please clarify the subject, message.',
     });
+  });
+
+  it('does not accept a model-invented or ambiguous recipient', () => {
+    const modelResult = {
+      recipient: 'other@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null,
+    };
+    expect(normalizeVoiceResult(modelResult, 'Send mail to sam@example.com.')).toMatchObject({
+      recipient: null,
+      clarification: 'Please dictate the recipient’s complete email address.',
+    });
+    expect(normalizeVoiceResult({ ...modelResult, recipient: 'sam@example.com' }, 'Send mail to sam@example.com and alex@example.com.'))
+      .toMatchObject({ recipient: null, clarification: 'Please dictate one clear recipient email address.' });
   });
 });
 
@@ -136,10 +155,26 @@ describe('AI routes and shared quota', () => {
     expect(response.json()).toMatchObject({ ...voiceResult, requestsRemaining: 24 });
     expect(model.invoke).toHaveBeenCalledOnce();
     expect(model.invoke).toHaveBeenCalledWith(expect.objectContaining({
-      system: expect.stringContaining('natural wording rather than labels'),
+      system: expect.stringContaining('Accept natural phrasing'),
       prompt: expect.stringContaining(transcript),
     }));
     expect(usage.reserve).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('accepts topic wording and Wispr Flow command markers without requiring exact field labels', async () => {
+    const transcript = 'Hey, send this mail to sam@example.com. The topic is regarding project submission. In the main message, mention that the team has finished. Hey Wispr Flow, make the heading I just said bold.';
+    const voiceResult = {
+      recipient: 'sam@example.com', subject: 'Project submission', body: 'The team has finished.',
+      formatting: [{ action: 'bold', target: { kind: 'phrase', text: 'The team has finished.', all: false } }],
+      clarification: null,
+    };
+    const model = { invoke: vi.fn(async () => voiceResult) };
+    const { deps } = dependencies({ model });
+    const app = buildApp(deps);
+    const response = await app.inject({ method: 'POST', url: '/v1/voice/parse', payload: { installationId: install, transcript } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ...voiceResult, requestsRemaining: 24 });
     await app.close();
   });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
 function createCompose({ recipient = '', subject = '', body = '' } = {}) {
@@ -36,6 +36,14 @@ function createCompose({ recipient = '', subject = '', body = '' } = {}) {
 beforeEach(() => { document.body.replaceChildren(); });
 
 describe('Gmail compose bridge', () => {
+  it('recognizes paste or one large inserted transcript, but not ordinary keystrokes', () => {
+    expect(isWisprStyleInsertion(new Event('paste'))).toBe(true);
+    expect(isWisprStyleInsertion(new InputEvent('beforeinput', { inputType: 'insertFromPaste' }))).toBe(true);
+    expect(isWisprStyleInsertion(new InputEvent('beforeinput', { inputType: 'insertText', data: 'A long dictated sentence inserted at once.' }))).toBe(true);
+    expect(isWisprStyleInsertion(new InputEvent('beforeinput', { inputType: 'insertText', data: 'a' }))).toBe(false);
+    expect(isWisprStyleInsertion(new InputEvent('input', { inputType: 'insertText', data: 'a' }), true)).toBe(true);
+  });
+
   it('fills the chosen compose fields and never clicks Send', () => {
     const dialog = createCompose();
     const send = dialog.querySelector('button')!;
@@ -128,13 +136,16 @@ describe('Gmail compose bridge', () => {
     });
   });
 
-  it('recognizes natural complete-email wording but ignores ordinary text and formatting-only phrases', () => {
+  it('recognizes natural email intent without requiring a subject cue, and ignores ordinary text', () => {
     expect(isFlowDraftDictation('To sam@example.com. Subject: Update. Message: Hello.')).toBe(true);
     expect(isFlowDraftDictation('Hey, send the mail to soham.pawar182006@gmail.com, and the subject is regarding project update for digital communication. In the main message, mention that the dates have been postponed by 2 weeks, so we have a lot of time for that. We can do it later, and let\'s prepare for the practical lab exam instead of that, to the team by Soham.')).toBe(true);
     expect(isFlowDraftDictation('To sam@example.com, subject is Project update, and in the main message mention the new date. Hey Wispr, make the heading I just said bold.')).toBe(true);
+    expect(isFlowDraftDictation('Hey, send this mail to sam@example.com. The topic is regarding project submission. In the main message, mention the update. Hey Wispr Flow, make the heading bold.')).toBe(true);
+    expect(isFlowDraftDictation('Please send the details to sam@example.com.')).toBe(true);
     expect(isFlowDraftDictation('Quarterly update. Hey Wispr, make that bold.')).toBe(false);
     expect(isFlowDraftDictation('To the design team. Subject: Update. Message: Please review.')).toBe(false);
     expect(isFlowDraftDictation('Please send me the project notes.')).toBe(false);
+    expect(isFlowDraftDictation('My email is sam@example.com, here is the note.')).toBe(false);
   });
 
   it('only accepts automatic dictation into a compose whose recipient and subject are still blank', () => {
@@ -230,8 +241,9 @@ describe('Gmail compose bridge', () => {
     vi.useRealTimers();
   });
 
-  it('routes one dictation and applies inline formatting after verifying the transcript is unchanged', () => {
+  it('routes one dictation and applies inline formatting after verifying the transcript is unchanged', async () => {
     const dialog = createCompose();
+    dialog.dataset.flowdraftCaptureReady = 'true';
     const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
     const transcript = 'To sam@example.com. Subject: Update. Message: Quarterly update';
     body.textContent = transcript;
@@ -246,7 +258,7 @@ describe('Gmail compose bridge', () => {
       clarification: null,
       requestsRemaining: 24,
     } satisfies VoiceParseResult;
-    const result = applyVoiceDraft(composeId, transcript, response);
+    const result = await applyVoiceDraft(composeId, transcript, response);
     expect(result.ok).toBe(true);
     expect(dialog.querySelector('[name="to"] [data-recipient-chip]')!.textContent).toBe('sam@example.com');
     expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
@@ -255,7 +267,7 @@ describe('Gmail compose bridge', () => {
     expect(format).toHaveBeenCalledWith('bold');
   });
 
-  it('leaves Gmail untouched if the user changed the pasted text during AI processing', () => {
+  it('leaves Gmail untouched if the user changed the pasted text during AI processing', async () => {
     const dialog = createCompose();
     const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
     body.textContent = 'Edited while processing';
@@ -263,8 +275,27 @@ describe('Gmail compose bridge', () => {
       recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
     } satisfies VoiceParseResult;
     const before = dialog.innerHTML;
-    const result = applyVoiceDraft(captureComposeId(dialog), 'Original transcript', response);
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const result = await applyVoiceDraft(captureComposeId(dialog), 'Original transcript', response);
     expect(result.ok).toBe(false);
     expect(dialog.innerHTML).toBe(before);
+  });
+
+  it('restores the original transcript if Gmail does not commit all draft fields', async () => {
+    const dialog = createCompose();
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const transcript = 'Send mail to sam@example.com. The topic is update. Message: Hello.';
+    body.textContent = transcript;
+    const composeId = captureComposeId(dialog);
+    const response = {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult;
+    const input = dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!;
+    input.replaceWith(Object.assign(document.createElement('input'), { name: 'different-recipient-field' }));
+    const result = await applyVoiceDraft(composeId, transcript, response);
+    expect(result.ok).toBe(false);
+    expect(body.textContent).toBe(transcript);
+    expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('');
   });
 });
