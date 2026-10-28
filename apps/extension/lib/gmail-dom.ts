@@ -3,10 +3,12 @@ import type { FormatParseResult, VoiceParseResult } from './api';
 
 const COMPOSE_SELECTOR = '[role="dialog"]';
 const BODY_SELECTOR = '[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]';
+const RECIPIENT_CONTAINER_SELECTOR = '[name="to"]';
+const RECIPIENT_INPUT_SELECTOR = 'input[name="to"], input[aria-label="To recipients"], [name="to"] input[role="combobox"], [name="to"] input';
 
 function composeElements(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(COMPOSE_SELECTOR)).filter((dialog) =>
-    dialog.querySelector(BODY_SELECTOR) && dialog.querySelector('input[name="to"], [name="to"]'),
+    dialog.querySelector(BODY_SELECTOR) && dialog.querySelector(RECIPIENT_CONTAINER_SELECTOR),
   );
 }
 
@@ -19,7 +21,7 @@ export function listComposeWindows(): ComposeWindow[] {
   const active = document.activeElement;
   return composeElements().map((element, index) => ({
     index,
-    recipient: fieldText(element, 'input[name="to"], [name="to"]'),
+    recipient: fieldText(element, RECIPIENT_CONTAINER_SELECTOR),
     subject: fieldText(element, 'input[name="subjectbox"], [name="subjectbox"]'),
     active: active instanceof Node && element.contains(active),
   }));
@@ -34,13 +36,16 @@ function titleOf(compose: HTMLElement): string {
 }
 
 export function isNewBlankCompose(compose: HTMLElement): boolean {
-  const recipient = compose.querySelector<HTMLInputElement>('input[name="to"], [name="to"]');
+  // Gmail renders the recipient control as a div (name="to"), not an input.
+  const recipient = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
+  const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
   const subject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
   const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
   const title = titleOf(compose);
   return Boolean(recipient && subject && body)
-    && /^(new message|compose)$/i.test(title)
-    && !recipient?.value.trim()
+    && /^(?:compose:\s*)?(?:new message|compose)$/i.test(title)
+    && !fieldText(compose, RECIPIENT_CONTAINER_SELECTOR)
+    && !recipientInput?.value.trim()
     && !subject?.value.trim()
     && !(body?.textContent ?? '').trim();
 }
@@ -191,8 +196,8 @@ function setField(element: HTMLElement, selectors: string, value: string): boole
 export function fillComposeWindow(index: number, draft: EmailDraft): ComposeResult {
   const compose = composeAt(index);
   if (!compose) return { ok: false, reason: 'That compose window is no longer open. Reopen the draft picker and try again.' };
-  const recipientSet = setField(compose, 'input[name="to"], [name="to"]', draft.recipient);
-  const recipientField = compose.querySelector<HTMLInputElement>('input[name="to"]');
+  const recipientSet = setField(compose, RECIPIENT_INPUT_SELECTOR, draft.recipient);
+  const recipientField = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
   if (recipientField) {
     recipientField.focus();
     recipientField.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));

@@ -1,4 +1,7 @@
 import { defineConfig } from 'wxt';
+import { readFileSync } from 'node:fs';
+
+const extensionPackage = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
 const apiBaseUrl = process.env.WXT_API_BASE_URL || 'https://wispr-voice-email-api.onrender.com';
 const apiOrigin = new URL(apiBaseUrl).origin;
@@ -8,7 +11,7 @@ export default defineConfig({
   manifest: {
     name: 'Wispr Voice Email',
     description: 'Dictate a complete Gmail draft and polish it by voice with Wispr Flow.',
-    version: '0.1.0',
+    version: extensionPackage.version,
     permissions: ['storage', 'sidePanel', 'commands'],
     host_permissions: ['https://mail.google.com/*', `${apiOrigin}/*`],
     commands: {

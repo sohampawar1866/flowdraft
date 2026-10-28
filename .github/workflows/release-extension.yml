@@ -39,6 +39,18 @@ jobs:
         env:
           WXT_API_BASE_URL: https://wispr-voice-email-api.onrender.com
 
+      - name: Verify packaged extension version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./apps/extension/package.json').version")"
+          MANIFEST_VERSION="$(node -p "require('./apps/extension/.output/chrome-mv3/manifest.json').version")"
+          TAG_VERSION="${RELEASE_TAG#v}"
+          if [ "$PACKAGE_VERSION" != "$MANIFEST_VERSION" ] || [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "Release tag $RELEASE_TAG, package version $PACKAGE_VERSION, and manifest version $MANIFEST_VERSION must match" >&2
+            exit 1
+          fi
+
       - name: Prepare stable download filename
         run: |
           mkdir -p release

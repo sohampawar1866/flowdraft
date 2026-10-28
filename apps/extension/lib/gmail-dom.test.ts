@@ -6,7 +6,23 @@ import type { VoiceParseResult } from './api';
 function createCompose({ recipient = '', subject = '', body = '' } = {}) {
   const dialog = document.createElement('div');
   dialog.setAttribute('role', 'dialog');
-  dialog.innerHTML = `<div role="heading">New Message</div><input name="to" value="${recipient}"><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
+  dialog.innerHTML = `<div role="heading">Compose: New Message</div><div name="to" aria-label="To"><input role="combobox" aria-label="To recipients"></div><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
+  const recipientContainer = dialog.querySelector<HTMLElement>('[name="to"]')!;
+  const recipientInput = dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!;
+  if (recipient) {
+    const chip = document.createElement('span');
+    chip.dataset.recipientChip = 'true';
+    chip.textContent = recipient;
+    recipientContainer.prepend(chip);
+  }
+  recipientInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || !recipientInput.value) return;
+    const chip = document.createElement('span');
+    chip.dataset.recipientChip = 'true';
+    chip.textContent = recipientInput.value;
+    recipientContainer.insertBefore(chip, recipientInput);
+    recipientInput.value = '';
+  });
   const messageBody = dialog.querySelector('[aria-label="Message Body"]')!;
   for (const line of body.split('\n')) {
     const paragraph = document.createElement('div');
@@ -26,7 +42,8 @@ describe('Gmail compose bridge', () => {
     const click = vi.spyOn(send, 'click');
     const result = fillComposeWindow(0, { recipient: 'sam@example.com', subject: 'Update', body: 'First line\nSecond line' });
     expect(result.ok).toBe(true);
-    expect(dialog.querySelector<HTMLInputElement>('input[name="to"]')!.value).toBe('sam@example.com');
+    expect(dialog.querySelector('[name="to"] [data-recipient-chip]')!.textContent).toBe('sam@example.com');
+    expect(dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!.value).toBe('');
     expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
     expect(dialog.querySelector('[aria-label="Message Body"]')!.textContent).toContain('First line');
     expect(dialog.querySelector('[aria-label="Message Body"]')!.textContent).toContain('Second line');
@@ -96,11 +113,13 @@ describe('Gmail compose bridge', () => {
   it('waits for Gmail to mount all fields before a new compose is eligible for focus', () => {
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
-    dialog.innerHTML = '<div role="heading">New Message</div><input name="to">';
+    dialog.innerHTML = '<div role="heading">Compose: New Message</div><div name="to"><input role="combobox" aria-label="To recipients"></div>';
     document.body.append(dialog);
     expect(isNewBlankCompose(dialog)).toBe(false);
     dialog.insertAdjacentHTML('beforeend', '<input name="subjectbox"><div aria-label="Message Body" contenteditable="true"></div>');
     expect(isNewBlankCompose(dialog)).toBe(true);
+    expect(focusNewComposeBody(dialog)).toBe(true);
+    expect(document.activeElement).toBe(dialog.querySelector('[aria-label="Message Body"]'));
   });
 
   it('retries focus after Gmail takes focus back and confirms the body is active', () => {
@@ -111,7 +130,7 @@ describe('Gmail compose bridge', () => {
     vi.advanceTimersByTime(0);
     const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
     expect(document.activeElement).toBe(body);
-    dialog.querySelector<HTMLInputElement>('input[name="to"]')!.focus();
+    dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!.focus();
     vi.advanceTimersByTime(120);
     expect(document.activeElement).toBe(body);
     vi.advanceTimersByTime(530);
@@ -121,7 +140,7 @@ describe('Gmail compose bridge', () => {
 
   it('stops focus retries after the user interacts with the compose', () => {
     const dialog = createCompose();
-    const recipient = dialog.querySelector<HTMLInputElement>('input[name="to"]')!;
+    const recipient = dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!;
     const onFailure = vi.fn();
     vi.useFakeTimers();
     retryFocusNewCompose(dialog, onFailure);
@@ -186,7 +205,7 @@ describe('Gmail compose bridge', () => {
     } satisfies VoiceParseResult;
     const result = applyVoiceDraft(composeId, transcript, response);
     expect(result.ok).toBe(true);
-    expect(dialog.querySelector<HTMLInputElement>('input[name="to"]')!.value).toBe('sam@example.com');
+    expect(dialog.querySelector('[name="to"] [data-recipient-chip]')!.textContent).toBe('sam@example.com');
     expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
     expect(body.textContent).toContain('Quarterly update');
     expect(body.textContent).not.toContain('Hey Wispr');
