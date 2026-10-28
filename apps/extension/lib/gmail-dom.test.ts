@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, isFlowDraftDictation, isNewBlankCompose, listComposeWindows, prepareNewComposeForDictation } from './gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, listComposeWindows, retryFocusNewCompose, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
 function createCompose({ recipient = '', subject = '', body = '' } = {}) {
@@ -93,15 +93,79 @@ describe('Gmail compose bridge', () => {
     expect(isFlowDraftDictation('Please send me the project notes.')).toBe(false);
   });
 
-  it('auto-focuses the body of a new blank compose and leaves non-new messages alone', () => {
+  it('waits for Gmail to mount all fields before a new compose is eligible for focus', () => {
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.innerHTML = '<div role="heading">New Message</div><input name="to">';
+    document.body.append(dialog);
+    expect(isNewBlankCompose(dialog)).toBe(false);
+    dialog.insertAdjacentHTML('beforeend', '<input name="subjectbox"><div aria-label="Message Body" contenteditable="true"></div>');
+    expect(isNewBlankCompose(dialog)).toBe(true);
+  });
+
+  it('retries focus after Gmail takes focus back and confirms the body is active', () => {
     const dialog = createCompose();
     expect(isNewBlankCompose(dialog)).toBe(true);
-    prepareNewComposeForDictation();
-    expect(document.activeElement).toBe(dialog.querySelector('[aria-label="Message Body"]'));
+    vi.useFakeTimers();
+    retryFocusNewCompose(dialog, vi.fn());
+    vi.advanceTimersByTime(0);
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    expect(document.activeElement).toBe(body);
+    dialog.querySelector<HTMLInputElement>('input[name="to"]')!.focus();
+    vi.advanceTimersByTime(120);
+    expect(document.activeElement).toBe(body);
+    vi.advanceTimersByTime(530);
+    expect(dialog.dataset.flowdraftFocusState).toBe('focused');
+    vi.useRealTimers();
+  });
 
+  it('stops focus retries after the user interacts with the compose', () => {
+    const dialog = createCompose();
+    const recipient = dialog.querySelector<HTMLInputElement>('input[name="to"]')!;
+    const onFailure = vi.fn();
+    vi.useFakeTimers();
+    retryFocusNewCompose(dialog, onFailure);
+    recipient.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    vi.runAllTimers();
+    expect(document.activeElement).not.toBe(dialog.querySelector('[aria-label="Message Body"]'));
+    expect(dialog.dataset.flowdraftFocusState).toBe('user');
+    expect(onFailure).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('shows a clickable Gmail fallback if focus fails and focuses the body on click', () => {
+    const dialog = createCompose();
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const nativeFocus = body.focus.bind(body);
+    const onFailure = vi.fn(showFocusFallback);
+    vi.useFakeTimers();
+    body.focus = () => undefined;
+    retryFocusNewCompose(dialog, onFailure);
+    vi.runAllTimers();
+    expect(onFailure).toHaveBeenCalledWith(dialog);
+    const notice = dialog.querySelector<HTMLButtonElement>('[data-flowdraft-focus-notice]')!;
+    expect(notice.textContent).toContain('Paste Last Transcript');
+    body.focus = nativeFocus;
+    notice.click();
+    expect(document.activeElement).toBe(body);
+    expect(dialog.querySelector('[data-flowdraft-focus-notice]')).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('never auto-focuses replies or nonblank composers', () => {
     const reply = createCompose();
     reply.querySelector('[role="heading"]')!.textContent = 'Reply';
     expect(isNewBlankCompose(reply)).toBe(false);
+    const nonblank = createCompose({ subject: 'Already started' });
+    const onFailure = vi.fn();
+    vi.useFakeTimers();
+    retryFocusNewCompose(reply, onFailure);
+    retryFocusNewCompose(nonblank, onFailure);
+    vi.runAllTimers();
+    expect(reply.dataset.flowdraftFocusState).toBeUndefined();
+    expect(nonblank.dataset.flowdraftFocusState).toBeUndefined();
+    expect(onFailure).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it('routes one dictation and applies inline formatting after verifying the transcript is unchanged', () => {

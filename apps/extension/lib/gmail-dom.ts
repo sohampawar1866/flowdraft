@@ -45,15 +45,92 @@ export function isNewBlankCompose(compose: HTMLElement): boolean {
     && !(body?.textContent ?? '').trim();
 }
 
-export function prepareNewComposeForDictation(): void {
-  for (const compose of composeElements()) {
-    if (!isNewBlankCompose(compose)) continue;
-    const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
-    if (!body || compose.dataset.flowdraftFocused === 'true') continue;
-    compose.dataset.flowdraftFocused = 'true';
-    compose.dataset.flowdraftCaptureReady = 'true';
-    body.focus();
+const FOCUS_RETRY_DELAYS_MS = [0, 120, 300, 650];
+
+export function focusNewComposeBody(compose: HTMLElement): boolean {
+  if (!compose.isConnected || !isNewBlankCompose(compose)) return false;
+  const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+  if (!body) return false;
+
+  body.focus({ preventScroll: true });
+  const selection = document.getSelection();
+  if (selection) {
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
   }
+  return document.activeElement === body;
+}
+
+export function retryFocusNewCompose(compose: HTMLElement, onFailure: (compose: HTMLElement) => void): () => void {
+  if (!isNewBlankCompose(compose) || compose.dataset.flowdraftFocusState) return () => undefined;
+
+  compose.dataset.flowdraftFocusState = 'pending';
+  let finished = false;
+  const timers: number[] = [];
+  const cleanup = (state: 'focused' | 'user' | 'stale' | 'failed') => {
+    if (finished) return;
+    finished = true;
+    timers.forEach((timer) => window.clearTimeout(timer));
+    compose.removeEventListener('pointerdown', onUserInteraction, true);
+    compose.removeEventListener('keydown', onUserInteraction, true);
+    compose.dataset.flowdraftFocusState = state;
+  };
+  const onUserInteraction = () => cleanup('user');
+
+  compose.addEventListener('pointerdown', onUserInteraction, true);
+  compose.addEventListener('keydown', onUserInteraction, true);
+  FOCUS_RETRY_DELAYS_MS.forEach((delay, index) => {
+    timers.push(window.setTimeout(() => {
+      if (finished) return;
+      if (!compose.isConnected || !isNewBlankCompose(compose)) {
+        cleanup('stale');
+        return;
+      }
+      const focused = focusNewComposeBody(compose);
+      if (index !== FOCUS_RETRY_DELAYS_MS.length - 1) return;
+      if (focused) cleanup('focused');
+      else {
+        cleanup('failed');
+        onFailure(compose);
+      }
+    }, delay));
+  });
+  return () => cleanup('stale');
+}
+
+export function showFocusFallback(compose: HTMLElement): HTMLButtonElement | null {
+  if (!compose.isConnected || !isNewBlankCompose(compose)) return null;
+  const existing = compose.querySelector<HTMLButtonElement>('[data-flowdraft-focus-notice]');
+  if (existing) return existing;
+
+  const notice = document.createElement('button');
+  notice.type = 'button';
+  notice.dataset.flowdraftFocusNotice = 'true';
+  notice.setAttribute('aria-live', 'polite');
+  notice.textContent = 'FlowDraft couldn’t focus the message body. Click here to focus it, then retry dictation or use Wispr Flow’s Paste Last Transcript shortcut.';
+  Object.assign(notice.style, {
+    display: 'block',
+    width: '100%',
+    margin: '8px 0',
+    padding: '9px 12px',
+    border: '1px solid #b86b4f',
+    borderRadius: '6px',
+    background: '#fff4ed',
+    color: '#4b2417',
+    font: '13px/1.4 Arial, sans-serif',
+    textAlign: 'left',
+    cursor: 'pointer',
+  });
+  notice.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (focusNewComposeBody(compose)) notice.remove();
+  });
+  compose.prepend(notice);
+  return notice;
 }
 
 export function newBlankComposeElements(): HTMLElement[] {

@@ -1,4 +1,4 @@
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, isFlowDraftDictation, listComposeWindows, newBlankComposeElements, prepareNewComposeForDictation, fillComposeWindow } from '@/lib/gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, isFlowDraftDictation, listComposeWindows, newBlankComposeElements, retryFocusNewCompose, showFocusFallback, fillComposeWindow } from '@/lib/gmail-dom';
 import type { ApplyFormatMessage, ApplyVoiceResultMessage, CapturedDictationMessage, FillDraftMessage, ListComposeMessage } from '@/lib/messages';
 
 export default defineContentScript({
@@ -6,22 +6,28 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     const observedBodies = new WeakSet<HTMLElement>();
+    const cancelFocusRetries = new WeakMap<HTMLElement, () => void>();
     const observeComposes = () => {
-      prepareNewComposeForDictation();
       for (const compose of newBlankComposeElements()) {
         const body = compose.querySelector<HTMLElement>('[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]');
-        if (!body || observedBodies.has(body)) continue;
-        observedBodies.add(body);
-        captureComposeId(compose);
-        compose.dataset.flowdraftCaptureReady = 'true';
-        body.addEventListener('paste', (event) => {
-          if (compose.dataset.flowdraftCaptureReady !== 'true' || compose.dataset.flowdraftProcessing === 'true') return;
-          const transcript = event.clipboardData?.getData('text/plain')?.trim();
-          if (!transcript || !isFlowDraftDictation(transcript)) return;
-          compose.dataset.flowdraftProcessing = 'true';
-          void chrome.runtime.sendMessage({ type: 'DICTATION_CAPTURED', composeId: captureComposeId(compose), transcript } satisfies CapturedDictationMessage)
-            .catch(() => { compose.dataset.flowdraftProcessing = 'false'; });
-        }, true);
+        if (!body) continue;
+        if (!observedBodies.has(body)) {
+          observedBodies.add(body);
+          captureComposeId(compose);
+          compose.dataset.flowdraftCaptureReady = 'true';
+          body.addEventListener('paste', (event) => {
+            cancelFocusRetries.get(compose)?.();
+            if (compose.dataset.flowdraftCaptureReady !== 'true' || compose.dataset.flowdraftProcessing === 'true') return;
+            const transcript = event.clipboardData?.getData('text/plain')?.trim();
+            if (!transcript || !isFlowDraftDictation(transcript)) return;
+            compose.dataset.flowdraftProcessing = 'true';
+            void chrome.runtime.sendMessage({ type: 'DICTATION_CAPTURED', composeId: captureComposeId(compose), transcript } satisfies CapturedDictationMessage)
+              .catch(() => { compose.dataset.flowdraftProcessing = 'false'; });
+          }, true);
+        }
+        if (!compose.dataset.flowdraftFocusState) {
+          cancelFocusRetries.set(compose, retryFocusNewCompose(compose, showFocusFallback));
+        }
       }
     };
     observeComposes();
