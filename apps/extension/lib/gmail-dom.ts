@@ -50,6 +50,18 @@ export function isNewBlankCompose(compose: HTMLElement): boolean {
     && !(body?.textContent ?? '').trim();
 }
 
+export function isNewComposeReadyForDictation(compose: HTMLElement): boolean {
+  if (!compose.isConnected || compose.dataset.flowdraftCaptureReady !== 'true') return false;
+  const title = titleOf(compose);
+  const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
+  const subject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
+  return /^(?:compose:\s*)?(?:new message|compose)$/i.test(title)
+    && Boolean(subject)
+    && !fieldText(compose, RECIPIENT_CONTAINER_SELECTOR)
+    && !recipientInput?.value.trim()
+    && !subject?.value.trim();
+}
+
 const FOCUS_RETRY_DELAYS_MS = [0, 120, 300, 650];
 
 export function focusNewComposeBody(compose: HTMLElement): boolean {
@@ -148,14 +160,44 @@ export function captureComposeId(compose: HTMLElement): string {
 }
 
 export function isFlowDraftDictation(text: string): boolean {
-  return /\bhey\s+wispr\b/i.test(text)
-    || /^\s*(?:to|recipient)\b[\s\S]{1,500}\bsubject\b[\s\S]{1,500}\b(?:message|body)\b/i.test(text);
+  const hasAddress = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
+  const hasSubjectCue = /\b(?:subject(?:\s+line)?\s*(?::|is\b|will be\b|should be\b)|with the subject\b|subject is regarding\b)/i.test(text);
+  const hasCompleteLabels = /^\s*(?:to|recipient)\b[\s\S]{1,500}\bsubject\b[\s\S]{1,500}\b(?:message|body)\b/i.test(text);
+
+  // This check runs only for a newly opened, blank Gmail compose. Requiring an
+  // address and subject cue keeps ordinary dictation and unrelated pastes out
+  // of the AI path while allowing different natural ways to give the fields.
+  return hasAddress && (hasSubjectCue || hasCompleteLabels);
+}
+
+export function composeBodyText(body: HTMLElement): string {
+  return (body.innerText ?? body.textContent ?? '').trim();
+}
+
+export function showComposeVoiceStatus(composeId: string, status: string, text: string): void {
+  const compose = composeElements().find((element) => element.dataset.flowdraftId === composeId);
+  const body = compose?.querySelector<HTMLElement>(BODY_SELECTOR);
+  if (!compose || !body) return;
+  let notice = compose.querySelector<HTMLElement>('[data-flowdraft-status]');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.dataset.flowdraftStatus = 'true';
+    notice.setAttribute('role', 'status');
+    Object.assign(notice.style, {
+      margin: '6px 0', padding: '8px 10px', borderRadius: '6px',
+      font: '12px/1.4 Arial, sans-serif',
+    });
+    body.before(notice);
+  }
+  notice.textContent = `FlowDraft: ${text}`;
+  notice.style.background = status === 'error' ? '#fff0ed' : status === 'success' ? '#edf7ed' : '#f4f3ed';
+  notice.style.color = status === 'error' ? '#7b241c' : '#333';
 }
 
 export function applyVoiceDraft(composeId: string, transcript: string, result: VoiceParseResult): ComposeResult {
   const compose = composeElements().find((element) => element.dataset.flowdraftId === composeId);
   if (!compose) return { ok: false, reason: 'That Gmail message is no longer open. The dictated text was left unchanged.' };
-  if (!result.recipient || result.subject === null || result.body === null) {
+  if (!result.recipient?.trim() || !result.subject?.trim() || !result.body?.trim()) {
     return { ok: false, reason: result.clarification ?? 'Please include the recipient, subject, and message.' };
   }
   const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
@@ -294,10 +336,18 @@ export function applyGmailFormatting(index: number, format: FormatParseResult, o
         return point?.node.parentElement?.closest<HTMLElement>('div,p,li');
       }).filter((el): el is HTMLElement => Boolean(el))
     : [];
+  const originalHtml = body.innerHTML;
   if (format.action === 'center' || format.action === 'bullets') {
     const uniqueBlocks = Array.from(new Set(blocks));
     if (!uniqueBlocks.length) return { ok: false, reason: 'I found the words, but not a paragraph I can safely format.' };
-    for (const block of uniqueBlocks) executeFormat(body, block, format.action);
+    for (const block of uniqueBlocks) {
+      const applied = executeFormat(body, block, format.action);
+      if (!applied.ok) {
+        body.innerHTML = originalHtml;
+        body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: body.textContent ?? '' }));
+        return applied;
+      }
+    }
     return { ok: true, message: `${format.action === 'bullets' ? 'Bullet list' : 'Alignment'} updated.` };
   }
   const ranges = chosen.map((match) => rangeForOffsets(body, match.start, match.end)).filter((range): range is Range => Boolean(range));
@@ -307,7 +357,11 @@ export function applyGmailFormatting(index: number, format: FormatParseResult, o
     if (!selection) continue;
     selection.removeAllRanges();
     selection.addRange(range);
-    document.execCommand(format.action === 'bold' ? 'bold' : 'italic');
+    if (!document.execCommand(format.action)) {
+      body.innerHTML = originalHtml;
+      body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: body.textContent ?? '' }));
+      return { ok: false, reason: 'Gmail could not apply that formatting. The text was left unchanged.' };
+    }
   }
   body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'format' }));
   body.focus();
@@ -323,7 +377,7 @@ function executeFormat(body: HTMLElement, paragraph: HTMLElement, action: Format
   selection?.addRange(range);
   const command = action === 'center' ? 'justifyCenter' : action === 'bullets' ? 'insertUnorderedList' : action;
   const applied = document.execCommand(command);
-  if (!applied) return { ok: false, reason: 'Gmail did not apply that formatting. Try selecting the text and use Gmail’s toolbar.' };
+  if (!applied) return { ok: false, reason: 'Gmail could not apply that formatting. The text was left unchanged.' };
   body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'format' }));
   body.focus();
   return { ok: true, message: `${action === 'bullets' ? 'Bullet list' : action === 'center' ? 'Center alignment' : action} applied.` };

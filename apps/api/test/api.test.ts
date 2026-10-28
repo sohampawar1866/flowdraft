@@ -52,6 +52,15 @@ describe('safe model result normalization', () => {
       formatting: [], clarification: null,
     })).toBeNull();
   });
+
+  it('treats empty required voice fields as missing so the raw transcript is preserved for clarification', () => {
+    expect(normalizeVoiceResult({
+      recipient: 'sam@example.com', subject: '   ', body: '', formatting: [], clarification: null,
+    })).toMatchObject({
+      recipient: 'sam@example.com', subject: null, body: null,
+      clarification: 'Please clarify the subject, message.',
+    });
+  });
 });
 
 describe('AI routes and shared quota', () => {
@@ -106,6 +115,31 @@ describe('AI routes and shared quota', () => {
     expect(response.json()).toMatchObject({ ...voiceResult, requestsRemaining: 24 });
     expect(usage.reserve).toHaveBeenCalledOnce();
     expect(model.invoke).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('passes natural email wording and inline formatting instructions through one voice request', async () => {
+    const transcript = 'Hey, send the mail to soham.pawar182006@gmail.com, and the subject is regarding project update for digital communication. In the main message, mention the dates have been postponed by two weeks. Hey Wispr, make the heading I just said bold.';
+    const voiceResult = {
+      recipient: 'soham.pawar182006@gmail.com', subject: 'Project update for digital communication',
+      body: 'The dates have been postponed by two weeks.',
+      formatting: [{ action: 'bold', target: { kind: 'phrase', text: 'The dates have been postponed by two weeks.', all: false } }],
+      clarification: null,
+    };
+    const model = { invoke: vi.fn(async () => voiceResult) };
+    const { deps, usage } = dependencies({ model });
+    const app = buildApp(deps);
+    const response = await app.inject({
+      method: 'POST', url: '/v1/voice/parse', payload: { installationId: install, transcript },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ...voiceResult, requestsRemaining: 24 });
+    expect(model.invoke).toHaveBeenCalledOnce();
+    expect(model.invoke).toHaveBeenCalledWith(expect.objectContaining({
+      system: expect.stringContaining('natural wording rather than labels'),
+      prompt: expect.stringContaining(transcript),
+    }));
+    expect(usage.reserve).toHaveBeenCalledOnce();
     await app.close();
   });
 

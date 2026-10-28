@@ -81,7 +81,12 @@ export function normalizeFormatResult(value: unknown): FormatResult | null {
 export function normalizeVoiceResult(value: unknown): VoiceResult | null {
   const parsed = voiceResultSchema.safeParse(value);
   if (!parsed.success) return null;
-  let result = parsed.data;
+  let result = {
+    ...parsed.data,
+    recipient: parsed.data.recipient?.trim() || null,
+    subject: parsed.data.subject?.trim() || null,
+    body: parsed.data.body?.trim() || null,
+  };
   if (result.recipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result.recipient)) {
     result = { ...result, recipient: null, clarification: result.clarification ?? 'Please dictate the recipient’s complete email address.' };
   }

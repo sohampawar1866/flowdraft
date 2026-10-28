@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, listComposeWindows, retryFocusNewCompose, showFocusFallback } from './gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
 function createCompose({ recipient = '', subject = '', body = '' } = {}) {
@@ -89,6 +89,30 @@ describe('Gmail compose bridge', () => {
     expect(dialog.querySelector('[aria-label="Message Body"]')!.textContent).toContain('Report Card');
   });
 
+  it.each([
+    ['bold', 'bold'],
+    ['italic', 'italic'],
+    ['center', 'justifyCenter'],
+    ['bullets', 'insertUnorderedList'],
+  ] as const)('checks whether Gmail successfully applies %s formatting', (action, command) => {
+    createCompose({ body: 'Project heading' });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => true) });
+    const format = { action, target: { kind: 'phrase', text: 'Project heading', all: false }, clarification: null, requestsRemaining: 2 } as const;
+    expect(applyGmailFormatting(0, format).ok).toBe(true);
+    expect(document.execCommand).toHaveBeenCalledWith(command);
+  });
+
+  it('reports a failed edit and rolls back any partial formatting change', () => {
+    const dialog = createCompose({ body: 'Project heading' });
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const before = body.innerHTML;
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) });
+    const format = { action: 'bold', target: { kind: 'phrase', text: 'Project heading', all: false }, clarification: null, requestsRemaining: 2 } as const;
+    const result = applyGmailFormatting(0, format);
+    expect(result.ok).toBe(false);
+    expect(body.innerHTML).toBe(before);
+  });
+
   it('targets the last paragraph for a recent-line command', () => {
     createCompose({ body: 'Earlier paragraph.\nThe line I just spoke.' });
     Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => true) });
@@ -104,10 +128,29 @@ describe('Gmail compose bridge', () => {
     });
   });
 
-  it('recognizes only clear FlowDraft email cues or the reserved spoken command marker', () => {
+  it('recognizes natural complete-email wording but ignores ordinary text and formatting-only phrases', () => {
     expect(isFlowDraftDictation('To sam@example.com. Subject: Update. Message: Hello.')).toBe(true);
-    expect(isFlowDraftDictation('Quarterly update. Hey Wispr, make that bold.')).toBe(true);
+    expect(isFlowDraftDictation('Hey, send the mail to soham.pawar182006@gmail.com, and the subject is regarding project update for digital communication. In the main message, mention that the dates have been postponed by 2 weeks, so we have a lot of time for that. We can do it later, and let\'s prepare for the practical lab exam instead of that, to the team by Soham.')).toBe(true);
+    expect(isFlowDraftDictation('To sam@example.com, subject is Project update, and in the main message mention the new date. Hey Wispr, make the heading I just said bold.')).toBe(true);
+    expect(isFlowDraftDictation('Quarterly update. Hey Wispr, make that bold.')).toBe(false);
+    expect(isFlowDraftDictation('To the design team. Subject: Update. Message: Please review.')).toBe(false);
     expect(isFlowDraftDictation('Please send me the project notes.')).toBe(false);
+  });
+
+  it('only accepts automatic dictation into a compose whose recipient and subject are still blank', () => {
+    const compose = createCompose();
+    compose.dataset.flowdraftCaptureReady = 'true';
+    compose.querySelector('[aria-label="Message Body"]')!.textContent = 'Dictated transcript';
+    expect(isNewComposeReadyForDictation(compose)).toBe(true);
+    compose.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value = 'Already started';
+    expect(isNewComposeReadyForDictation(compose)).toBe(false);
+  });
+
+  it('shows processing status inside Gmail even when the sidebar is not open', () => {
+    const dialog = createCompose();
+    const id = captureComposeId(dialog);
+    showComposeVoiceStatus(id, 'processing', 'Organizing your email…');
+    expect(dialog.querySelector('[data-flowdraft-status]')?.textContent).toContain('Organizing your email');
   });
 
   it('waits for Gmail to mount all fields before a new compose is eligible for focus', () => {

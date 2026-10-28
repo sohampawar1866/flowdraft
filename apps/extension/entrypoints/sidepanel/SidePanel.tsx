@@ -71,14 +71,14 @@ export default function SidePanel() {
       <div className="section-heading"><div><div className="step">01 / DICTATE</div><h2>Start a new email</h2></div><span className="mic-icon">⌁</span></div>
       <ol className="steps">
         <li>Open a new, blank Gmail compose. FlowDraft will focus the message body.</li>
-        <li>Hold <kbd>Fn</kbd> and say the recipient, subject, and message. For example: “To sam@example.com. Subject: Project update. Message: Hi Sam…”</li>
+        <li>Hold <kbd>Fn</kbd> and speak naturally. For example: “Send the mail to sam@example.com. The subject is Project update. In the main message, say…”</li>
         <li>Release Fn. FlowDraft sorts the draft into Gmail’s fields.</li>
       </ol>
     </section>
 
     <section className="card">
       <div className="section-heading"><div><div className="step">02 / FORMAT WHILE YOU SPEAK</div><h2>Say “Hey Wispr”</h2></div><span className="format-icon">Aa</span></div>
-      <p className="small-copy">In the same dictation, say “Hey Wispr, make the heading I just said bold.” You can also name exact text, such as “Hey Wispr, italicize ‘next Tuesday’.” Say “every” when you want all matches.</p>
+      <p className="small-copy">In the same dictation, say “Hey Wispr, make the heading I just said bold.” You can name a phrase or ask to make every matching phrase bold or italic. You can also center a paragraph or turn it into bullets.</p>
       <p className="micro">Formatting is applied after you release Fn. Review the completed draft and send it using Gmail.</p>
     </section>
 

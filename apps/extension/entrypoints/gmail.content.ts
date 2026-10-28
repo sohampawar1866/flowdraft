@@ -1,5 +1,7 @@
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, isFlowDraftDictation, listComposeWindows, newBlankComposeElements, retryFocusNewCompose, showFocusFallback, fillComposeWindow } from '@/lib/gmail-dom';
-import type { ApplyFormatMessage, ApplyVoiceResultMessage, CapturedDictationMessage, FillDraftMessage, ListComposeMessage } from '@/lib/messages';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, composeBodyText, isFlowDraftDictation, isNewComposeReadyForDictation, listComposeWindows, newBlankComposeElements, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback, fillComposeWindow } from '@/lib/gmail-dom';
+import type { ApplyFormatMessage, ApplyVoiceResultMessage, CapturedDictationMessage, FillDraftMessage, ListComposeMessage, VoiceStatusMessage } from '@/lib/messages';
+
+const DICTATION_QUIET_MS = 1100;
 
 export default defineContentScript({
   matches: ['https://mail.google.com/*'],
@@ -7,6 +9,7 @@ export default defineContentScript({
   main() {
     const observedBodies = new WeakSet<HTMLElement>();
     const cancelFocusRetries = new WeakMap<HTMLElement, () => void>();
+    const captureTimers = new WeakMap<HTMLElement, number>();
     const observeComposes = () => {
       for (const compose of newBlankComposeElements()) {
         const body = compose.querySelector<HTMLElement>('[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]');
@@ -15,15 +18,29 @@ export default defineContentScript({
           observedBodies.add(body);
           captureComposeId(compose);
           compose.dataset.flowdraftCaptureReady = 'true';
-          body.addEventListener('paste', (event) => {
+          const scheduleCapture = () => {
             cancelFocusRetries.get(compose)?.();
             if (compose.dataset.flowdraftCaptureReady !== 'true' || compose.dataset.flowdraftProcessing === 'true') return;
-            const transcript = event.clipboardData?.getData('text/plain')?.trim();
-            if (!transcript || !isFlowDraftDictation(transcript)) return;
-            compose.dataset.flowdraftProcessing = 'true';
-            void chrome.runtime.sendMessage({ type: 'DICTATION_CAPTURED', composeId: captureComposeId(compose), transcript } satisfies CapturedDictationMessage)
-              .catch(() => { compose.dataset.flowdraftProcessing = 'false'; });
-          }, true);
+            const previous = captureTimers.get(body);
+            if (previous !== undefined) window.clearTimeout(previous);
+            const timer = window.setTimeout(() => {
+              captureTimers.delete(body);
+              if (compose.dataset.flowdraftProcessing === 'true') return;
+              if (!isNewComposeReadyForDictation(compose)) return;
+              const transcript = composeBodyText(body);
+              if (!transcript || !isFlowDraftDictation(transcript)) return;
+              compose.dataset.flowdraftProcessing = 'true';
+              showComposeVoiceStatus(captureComposeId(compose), 'processing', 'Organizing your email…');
+              void chrome.runtime.sendMessage({ type: 'DICTATION_CAPTURED', composeId: captureComposeId(compose), transcript } satisfies CapturedDictationMessage)
+                .catch(() => {
+                  compose.dataset.flowdraftProcessing = 'false';
+                  showComposeVoiceStatus(captureComposeId(compose), 'error', 'Could not reach FlowDraft. Your dictated text is still here.');
+                });
+            }, DICTATION_QUIET_MS);
+            captureTimers.set(body, timer);
+          };
+          body.addEventListener('paste', scheduleCapture, true);
+          body.addEventListener('input', scheduleCapture, true);
         }
         if (!compose.dataset.flowdraftFocusState) {
           cancelFocusRetries.set(compose, retryFocusNewCompose(compose, showFocusFallback));
@@ -49,6 +66,11 @@ export default defineContentScript({
       }
       if (isApplyVoiceResult(message)) {
         sendResponse(applyVoiceDraft(message.composeId, message.transcript, message.result));
+        return true;
+      }
+      if (isVoiceStatus(message) && message.composeId) {
+        showComposeVoiceStatus(message.composeId, message.status, message.text);
+        return;
       }
       return true;
     });
@@ -67,4 +89,9 @@ function isFillDraft(value: unknown): value is FillDraftMessage {
 }
 function isApplyFormat(value: unknown): value is ApplyFormatMessage {
   return typeof value === 'object' && value !== null && 'type' in value && value.type === 'APPLY_FORMAT';
+}
+function isVoiceStatus(value: unknown): value is VoiceStatusMessage {
+  return typeof value === 'object' && value !== null && 'type' in value && value.type === 'VOICE_STATUS'
+    && 'status' in value && (value.status === 'processing' || value.status === 'success' || value.status === 'clarification' || value.status === 'error')
+    && 'text' in value && typeof value.text === 'string';
 }
