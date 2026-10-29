@@ -227,8 +227,10 @@ export async function applyVoiceDraft(composeId: string, transcript: string, res
   const index = composeElements().indexOf(compose);
   const filled = fillComposeWindow(index, { recipient: result.recipient, subject: result.subject, body: result.body });
   if (!filled.ok) {
-    restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient);
-    return { ok: false, reason: `${filled.reason} Your dictated text was restored.` };
+    const restored = await restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient, transcript);
+    return { ok: false, reason: restored
+      ? `${filled.reason} Generated fields were cleared and your dictated text was restored.`
+      : `${filled.reason} I could not verify a full restore. Review the draft carefully; nothing was sent.` };
   }
 
   // Let Gmail's own event handlers commit the recipient chip before checking
@@ -237,12 +239,15 @@ export async function applyVoiceDraft(composeId: string, transcript: string, res
   const recipientContainer = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
   const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
   const appliedBody = compose.querySelector<HTMLElement>(BODY_SELECTOR);
-  const committedRecipient = Boolean(recipientContainer && recipientInput && !recipientInput.value.trim()
-    && recipientContainer.textContent?.toLowerCase().includes(result.recipient!.toLowerCase()));
+  const committedRecipient = recipientContainer && recipientInput
+    ? isRecipientCommitted(recipientContainer, recipientInput, result.recipient!)
+    : false;
   if (!committedRecipient || subject.value !== result.subject
     || !appliedBody || normalizeText(composeBodyText(appliedBody)) !== normalizeText(result.body)) {
-    restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient);
-    return { ok: false, reason: 'Gmail did not confirm all draft fields. I restored your dictated text so you can retry.' };
+    const restored = await restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient!, transcript);
+    return { ok: false, reason: restored
+      ? 'Gmail did not confirm the draft fields. I cleared the generated fields and restored your dictated text; you can retry.'
+      : 'Gmail did not confirm the draft fields, and I could not verify a full restore. Review the recipient, subject, and message carefully. Nothing was sent.' };
   }
 
   const skipped: string[] = [];
@@ -255,7 +260,25 @@ export async function applyVoiceDraft(composeId: string, transcript: string, res
     : { ok: true, message: 'Draft filled and voice formatting applied. Review it in Gmail before sending.' };
 }
 
-function restoreVoiceCompose(compose: HTMLElement, originalBody: string, originalSubject: string, recipient: string): void {
+function isRecipientCommitted(container: HTMLElement, input: HTMLInputElement, recipient: string): boolean {
+  if (input.value.trim()) return false;
+  const nodes = Array.from(container.querySelectorAll<HTMLElement>('*'))
+    .filter((node) => !node.contains(input) && node !== input);
+  const addressInMetadata = nodes.some((node) =>
+    ['email', 'data-email', 'data-hovercard-id', 'title', 'aria-label']
+      .some((attribute) => node.getAttribute(attribute)?.toLowerCase().includes(recipient.toLowerCase())),
+  );
+  if (addressInMetadata) return true;
+
+  // Gmail often replaces an address with a contact chip whose visible label is
+  // a person's name. Since the compose was blank before insertion, a committed
+  // non-empty chip plus an empty recipient input confirms the token was added.
+  return Array.from(container.children).some((child) =>
+    !child.contains(input) && Boolean(child.textContent?.trim()),
+  );
+}
+
+async function restoreVoiceCompose(compose: HTMLElement, originalBody: string, originalSubject: string, recipient: string, transcript: string): Promise<boolean> {
   const recipientContainer = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
   const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
   if (recipientInput) {
@@ -263,10 +286,9 @@ function restoreVoiceCompose(compose: HTMLElement, originalBody: string, origina
     setter?.call(recipientInput, '');
     recipientInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     recipientInput.dispatchEvent(new Event('change', { bubbles: true }));
-    const chip = Array.from(recipientContainer?.children ?? []).find((child) =>
-      !child.contains(recipientInput) && child.textContent?.toLowerCase().includes(recipient.toLowerCase()),
-    );
-    chip?.remove();
+    for (const child of Array.from(recipientContainer?.children ?? [])) {
+      if (!child.contains(recipientInput) && child.textContent?.trim()) child.remove();
+    }
   }
   setField(compose, 'input[name="subjectbox"], [name="subjectbox"]', originalSubject);
   const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
@@ -275,6 +297,13 @@ function restoreVoiceCompose(compose: HTMLElement, originalBody: string, origina
     body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: composeBodyText(body) }));
     body.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  const restoredSubject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
+  const restoredBody = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+  const noRecipientToken = Boolean(recipientContainer && (!recipientInput || !recipientInput.value.trim())
+    && !Array.from(recipientContainer.children).some((child) => !child.contains(recipientInput) && child.textContent?.trim()));
+  return noRecipientToken && restoredSubject?.value === originalSubject && Boolean(restoredBody)
+    && normalizeText(composeBodyText(restoredBody!)) === normalizeText(transcript);
 }
 
 function normalizeText(text: string): string { return text.replace(/\s+/g, ' ').trim(); }

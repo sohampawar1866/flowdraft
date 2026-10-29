@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
-function createCompose({ recipient = '', subject = '', body = '' } = {}) {
+function createCompose({ recipient = '', subject = '', body = '', recipientDisplay = '' }: { recipient?: string; subject?: string; body?: string; recipientDisplay?: string } = {}) {
   const dialog = document.createElement('div');
   dialog.setAttribute('role', 'dialog');
   dialog.innerHTML = `<div role="heading">Compose: New Message</div><div name="to" aria-label="To"><input role="combobox" aria-label="To recipients"></div><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
@@ -19,7 +19,8 @@ function createCompose({ recipient = '', subject = '', body = '' } = {}) {
     if (event.key !== 'Enter' || !recipientInput.value) return;
     const chip = document.createElement('span');
     chip.dataset.recipientChip = 'true';
-    chip.textContent = recipientInput.value;
+    chip.setAttribute('email', recipientInput.value);
+    chip.textContent = recipientDisplay || recipientInput.value;
     recipientContainer.insertBefore(chip, recipientInput);
     recipientInput.value = '';
   });
@@ -268,6 +269,21 @@ describe('Gmail compose bridge', () => {
     expect(body.textContent).toContain('Quarterly update');
     expect(body.textContent).not.toContain('Hey Wispr');
     expect(format).toHaveBeenCalledWith('bold');
+  });
+
+  it('accepts Gmail contact chips that display a name instead of the email address', async () => {
+    const dialog = createCompose({ recipientDisplay: 'Soham Pawar (gmail.com)' });
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const transcript = 'Send mail to sam@example.com. The topic is update. Message: Hello.';
+    body.textContent = transcript;
+    const response = {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult;
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, response);
+    expect(result.ok).toBe(true);
+    expect(dialog.querySelector('[name="to"] [data-recipient-chip]')?.textContent).toBe('Soham Pawar (gmail.com)');
+    expect(body.textContent).toBe('Hello');
   });
 
   it('leaves Gmail untouched if the user changed the pasted text during AI processing', async () => {
