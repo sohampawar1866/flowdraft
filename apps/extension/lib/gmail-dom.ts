@@ -52,11 +52,13 @@ export function isNewBlankCompose(compose: HTMLElement): boolean {
 
 export function isNewComposeReadyForDictation(compose: HTMLElement): boolean {
   if (!compose.isConnected || compose.dataset.flowdraftCaptureReady !== 'true') return false;
-  const title = titleOf(compose);
   const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
   const subject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
-  return /^(?:compose:\s*)?(?:new message|compose)$/i.test(title)
-    && Boolean(subject)
+  // The compose was marked capture-ready only while it matched Gmail's blank
+  // new-message structure. Gmail may change its hidden heading/title after the
+  // body receives dictation, so re-check the editable fields rather than the
+  // transient title before applying the parsed result.
+  return Boolean(subject)
     && !fieldText(compose, RECIPIENT_CONTAINER_SELECTOR)
     && !recipientInput?.value.trim()
     && !subject?.value.trim();

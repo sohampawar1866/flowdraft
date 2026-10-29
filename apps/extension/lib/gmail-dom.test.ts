@@ -152,6 +152,7 @@ describe('Gmail compose bridge', () => {
     const compose = createCompose();
     compose.dataset.flowdraftCaptureReady = 'true';
     compose.querySelector('[aria-label="Message Body"]')!.textContent = 'Dictated transcript';
+    compose.querySelector('[role="heading"]')!.textContent = 'Draft saved';
     expect(isNewComposeReadyForDictation(compose)).toBe(true);
     compose.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value = 'Already started';
     expect(isNewComposeReadyForDictation(compose)).toBe(false);
@@ -247,6 +248,8 @@ describe('Gmail compose bridge', () => {
     const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
     const transcript = 'To sam@example.com. Subject: Update. Message: Quarterly update';
     body.textContent = transcript;
+    // Gmail can replace its compose heading after the transcript is inserted.
+    dialog.querySelector('[role="heading"]')!.textContent = 'Draft saved';
     const composeId = captureComposeId(dialog);
     const format = vi.fn(() => true);
     Object.defineProperty(document, 'execCommand', { configurable: true, value: format });
