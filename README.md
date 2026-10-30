@@ -1,93 +1,100 @@
 # FlowDraft for Gmail
 
-FlowDraft is a Chrome side-panel extension that lets Wispr Flow users dictate a complete Gmail draft and include spoken formatting commands in the same dictation. It fills the draft for review and never sends email.
+FlowDraft is a Chrome extension for people who dictate with Wispr Flow. It takes one dictated email, separates the recipient, subject, and message, and can apply spoken formatting commands to a new Gmail draft. It never sends email; the user reviews and sends from Gmail.
 
-## Repository layout
+## How it works
 
-```text
-apps/
-  api/          Fastify API and Bedrock integration
-  extension/    WXT + Vite + React Chrome extension
-packages/
-  contracts/    Shared API response schemas and TypeScript types
-docs/           Product requirements and optional project ideas
-render.yaml     Render API and Postgres deployment blueprint
-```
+1. Open a new, blank Gmail compose. FlowDraft tries to focus its message body automatically.
+2. Hold Fn and dictate the email naturally. Include the recipient's full email address and clear subject and message wording.
+3. For inline formatting, say “Hey Wispr” or “Hey Wispr Flow” before a command. Supported actions are bold, italic, center, and bullets.
+4. Release Fn. After Wispr Flow inserts the text and it settles, FlowDraft sends one parse request, then fills and formats the same Gmail draft if the result is clear.
+5. Review and correct the draft in Gmail. Click Gmail's Send button yourself when ready.
 
-## Local setup
+## Why it helps
 
-Requirements: Node.js 22.13+, npm, Chrome, and a local Postgres database. For AI parsing, configure an AWS Bedrock bearer key and a model that supports Converse tool use in your selected region.
+Developers often send several brief but important team updates in a day. Repeatedly switching between Gmail fields and manually formatting key details interrupts that flow. FlowDraft lets them dictate the update and its formatting in one pass, then review the finished draft. A copy-ready project description for the hackathon form is in [Project submission copy](docs/PROJECT-PITCH.md).
 
-1. Install dependencies from the repository root:
+The side panel shows setup guidance, the installation's remaining quota, and status. It does not need to stay open for capture or processing. Replies, existing drafts, unrelated typing, and text without clear email cues are not intended to be processed. If FlowDraft cannot safely apply the result, it keeps the transcript available and reports the problem in Gmail.
 
-   ```sh
-   npm install
-   ```
+## What the prototype supports
 
-2. Copy `apps/api/.env.example` to `apps/api/.env` and set `DATABASE_URL`, `AWS_REGION`, `BEDROCK_MODEL_ID`, and `AWS_BEARER_TOKEN_BEDROCK`. Start the API; it creates its usage tables on startup:
+- Chrome and Gmail web, for new blank compose windows.
+- Wispr Flow as the speech-to-text input method. FlowDraft does not listen to audio or request microphone access.
+- Natural email phrasing and inline formatting in the same dictation.
+- Formatting exact phrases or the just-spoken line; “every” explicitly applies to repeated matches.
+- Manual review and sending in Gmail.
 
-   ```sh
-   npm run dev:api
-   ```
+Gmail's compose markup is private and can change. The Gmail adapter and sanitized fixture cover the observed structure, but this integration is a prototype rather than a stable Gmail API. See [architecture and limits](docs/ARCHITECTURE.md).
 
-3. In another terminal, start WXT with the local API URL:
+## Privacy and limits
 
-   ```sh
-   WXT_API_BASE_URL=http://localhost:8787 npm run dev:extension
-   ```
+When a user accepts the one-time privacy notice, recognized dictation text is sent to the FlowDraft API and Amazon Bedrock for processing. FlowDraft does not save the text or log it. The API stores an installation UUID and request counts in Postgres.
 
-4. In Chrome, open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `apps/extension/.output/chrome-mv3`.
-5. Open Gmail, open FlowDraft from Chrome’s toolbar, and start a new blank compose. FlowDraft focuses the message body. Hold Fn and dictate the recipient, subject, and message using “To”, “Subject”, and “Message” cues. Say “Hey Wispr” before a formatting instruction, then release Fn.
+- 25 AI requests per extension installation.
+- 500 AI requests per UTC day shared across installations by default (`MAX_DAILY_AI_REQUESTS`). Both limits are reserved atomically before a model call; failed model calls remain counted.
+- The API also limits request size and applies IP-based rate limiting. An installation ID is not a verified identity and can be reset by clearing extension data or reinstalling.
+- The extension contains the public API URL, not Bedrock credentials. It has no Gmail OAuth, mailbox scanning, microphone, or email-send permission.
 
-The extension prompts once before sending dictated text to the API. The service uses Bedrock to extract email fields and inline formatting commands in one request; the browser alone performs Gmail edits. Review the completed draft and send it using Gmail.
+The usage caps bound request counts, not a precise dollar amount. Keep per-request limits and AWS spending alerts enabled for a public demo.
 
-## Deploying the API to Render
+## Requirements
 
-`render.yaml` defines one free Node web service and one small, free Postgres database for the hackathon. Configure these Render environment variables/secrets:
+- Node.js 22.13 or later and npm.
+- Chrome for loading and trying the extension.
+- PostgreSQL and an AWS Bedrock API bearer token/model to run the API locally.
+- A configured deployed API and enabled Bedrock model to use the published extension.
 
-- `AWS_REGION` — for example, `us-east-1`.
-- `BEDROCK_MODEL_ID` defaults to `amazon.nova-pro-v1:0`; change it only if you choose another enabled Converse/tool-use model.
-- `MAX_DAILY_AI_REQUESTS` defaults to `500`. The same daily UTC cap applies to email parsing and formatting across all installations.
-- `AWS_BEARER_TOKEN_BEDROCK` — your Bedrock API bearer key. Keep it in Render’s secret field; never put it in extension code or commit it.
-- `DATABASE_URL` is supplied automatically by the Postgres resource in the Blueprint; you do not copy or create this connection string yourself.
-- `NODE_ENV=production` is set by the Blueprint.
+## Local development
 
-The server uses the bearer token directly; it does not need `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` when the bearer token is set. If you use a short-term key, it expires with the AWS session (up to 12 hours), so use a suitable long-term Bedrock API key for a continuously hosted demo or replace the secret when it expires.
-
-The free Render Postgres plan has 1 GB of storage and expires 30 days after creation. Upgrade it before then if you need to keep its data longer.
-
-The free API service normally spins down after 15 minutes without incoming traffic. An external monitor can request `/health` every 10 minutes to keep it warm; occasional scheduler delays or Render maintenance can still cause a cold start. Render includes 750 free service hours per workspace each month, shared across free services. Use a paid always-on plan if dependable no-cold-start availability is more important than keeping hosting free.
-
-After the service is live, set `WXT_API_BASE_URL` to the Render service URL when building the extension. The extension build embeds this public API URL; it does not contain AWS credentials.
-
-## Root commands
+From the repository root:
 
 ```sh
-npm run dev:extension
-npm run dev:api
-npm run typecheck
-npm test
-npm run build
-npm run zip
+npm ci
+cp apps/api/.env.example apps/api/.env
 ```
 
-## Download and install a test build
+Set the values in `apps/api/.env` for PostgreSQL and Bedrock, then start the API:
 
-Pushing a version tag such as `v0.1.0` runs the GitHub Actions release workflow. It builds the Chrome extension with the deployed API URL and publishes `flowdraft-chrome.zip` on the matching GitHub Release. The ZIP has `manifest.json` at its root: download it, extract it, open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select the extracted folder. Do not choose the ZIP file itself.
+```sh
+npm run dev:api
+```
 
-To release a later extension version, update the version in `apps/extension/package.json` and `apps/extension/wxt.config.ts` to match the new `vX.Y.Z` tag, then push that tag. The landing page can link directly to `https://github.com/sohampawar1866/flowdraft/releases/latest/download/flowdraft-chrome.zip` so its download button follows the latest published release.
+In another terminal, point the development extension at that API and start WXT:
 
-The API tests use injected fake usage/model dependencies and do not call AWS. A live Gmail trial still needs a Chrome profile, Wispr Flow, a deployed/configured API, Postgres, and an enabled Bedrock model.
+```sh
+WXT_API_BASE_URL=http://localhost:8787 npm run dev:extension
+```
 
-## Product behavior and privacy
+Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the generated `apps/extension/.output/chrome-mv3` directory. Open Gmail and reload the tab after reloading or replacing the extension.
 
-- The Gmail content script auto-focuses the body of a new blank compose and only processes a paste with explicit email cues or the reserved “Hey Wispr” marker. It fills and formats the draft and never finds or clicks Gmail’s Send button.
-- A shared schema package keeps the extension and API aligned on their response formats.
-- Email text is not logged or saved in Postgres. The database stores random installation IDs, their usage counts, and one aggregate daily request count.
-- Valid AI attempts reserve both the installation allowance and shared daily allowance before calling Bedrock. Failed model calls remain counted because the provider may have processed them; database failures fail closed without calling Bedrock.
-- Browser permissions cover local extension storage, the side panel, the keyboard command and Gmail’s compose surface. There is no Gmail OAuth, mailbox search, microphone access, background audio listening or send permission.
-- The first release targets Gmail web in Chrome. Outlook, Apple Mail and other editors are not supported.
+Configuration details are in [Development and deployment](docs/DEVELOPMENT.md). API endpoints and quota behavior are in [API reference](docs/API.md).
 
-The request allowance is associated with an installation UUID, not a verified person. Reinstalling or clearing extension storage may reset it. IP rate limiting is supplementary abuse protection and does not establish a person’s identity.
+## Commands
 
-See [product requirements](docs/PROJECT-REQUIREMENTS.md) and [optional idea](docs/OPTIONAL-IDEA.md).
+```sh
+npm run dev:extension  # Start the local extension dev server
+npm run dev:api        # Start the local API
+npm run typecheck      # Type-check the extension and API
+npm test               # Run the automated test suites
+npm run build          # Build API and extension
+npm run zip            # Build a Chrome Load unpacked ZIP
+```
+
+## Releases and installation
+
+The GitHub Actions workflow creates a release when a `v*` tag is pushed. It checks the tag against `apps/extension/package.json`, builds the extension with the production Render API URL, verifies the packaged manifest version, and attaches `flowdraft-chrome.zip`.
+
+To publish a new extension version:
+
+1. Update `apps/extension/package.json` and `package-lock.json` to the same semantic version.
+2. Commit and push the changes to `main`.
+3. Create and push the matching tag, for example `v0.1.13`.
+4. Wait for the `Build and release Chrome extension` GitHub Actions workflow. The release title uses **FlowDraft Stable** and the ZIP is named `flowdraft-chrome.zip`.
+
+Download the ZIP from the latest GitHub Release, extract it, then in Chrome open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and choose the extracted folder containing `manifest.json`. Chrome loads the extracted folder, not the ZIP itself. The latest ZIP can be linked from a landing page with:
+
+`https://github.com/sohampawar1866/flowdraft/releases/latest/download/flowdraft-chrome.zip`
+
+## License
+
+FlowDraft is released under the [MIT License](LICENSE). You may use, modify, and redistribute it under that license's terms.

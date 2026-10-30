@@ -7,14 +7,6 @@ export default defineBackground(() => {
     void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   });
 
-  chrome.commands.onCommand.addListener(async (command) => {
-    if (command !== 'focus-format-command') return;
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab?.windowId) return;
-    await chrome.sidePanel.open({ windowId: tab.windowId });
-    await chrome.storage.local.set({ focusFormatCommandAt: Date.now() });
-  });
-
   chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     if (!isCapturedDictation(message) || !sender.tab?.id) return;
     void processDictation(sender.tab.id, message).then(sendResponse);

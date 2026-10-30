@@ -1,4 +1,4 @@
-import type { ComposeResult, ComposeWindow, EmailDraft } from './messages';
+import type { ComposeResult } from './messages';
 import type { FormatParseResult, VoiceParseResult } from './api';
 
 const COMPOSE_SELECTOR = '[role="dialog"]';
@@ -20,16 +20,6 @@ function composeElements(): HTMLElement[] {
 function fieldText(compose: HTMLElement, selector: string): string {
   const field = compose.querySelector<HTMLInputElement | HTMLElement>(selector);
   return (field as HTMLInputElement | null)?.value ?? field?.textContent?.trim() ?? '';
-}
-
-export function listComposeWindows(): ComposeWindow[] {
-  const active = document.activeElement;
-  return composeElements().map((element, index) => ({
-    index,
-    recipient: fieldText(element, RECIPIENT_CONTAINER_SELECTOR),
-    subject: fieldText(element, 'input[name="subjectbox"], [name="subjectbox"]'),
-    active: active instanceof Node && element.contains(active),
-  }));
 }
 
 function composeAt(index: number): HTMLElement | undefined { return composeElements()[index]; }
@@ -410,16 +400,6 @@ function setComposeBody(compose: HTMLElement, bodyText: string): boolean {
   body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: bodyText }));
   body.dispatchEvent(new Event('change', { bubbles: true }));
   return true;
-}
-
-export function fillComposeWindow(index: number, draft: EmailDraft): ComposeResult {
-  const compose = composeAt(index);
-  if (!compose) return { ok: false, reason: 'That compose window is no longer open. Reopen the draft picker and try again.' };
-  const recipientSet = commitRecipient(compose, draft.recipient);
-  const subjectSet = setField(compose, 'input[name="subjectbox"], [name="subjectbox"]', draft.subject);
-  const bodySet = setComposeBody(compose, draft.body);
-  if (!recipientSet || !subjectSet || !bodySet) return { ok: false, reason: 'Gmail changed its compose layout. Reload Gmail and try again.' };
-  return { ok: true, message: 'Draft filled. Review it in Gmail before sending.' };
 }
 
 function textMap(root: HTMLElement): { text: string; points: Array<{ node: Text; start: number; end: number }> } {

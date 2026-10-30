@@ -9,17 +9,11 @@ const apiOrigin = new URL(apiBaseUrl).origin;
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
-    name: 'Wispr Voice Email',
+    name: 'FlowDraft for Gmail',
     description: 'Dictate a complete Gmail draft and polish it by voice with Wispr Flow.',
     version: extensionPackage.version,
-    permissions: ['storage', 'sidePanel', 'commands'],
+    permissions: ['storage', 'sidePanel'],
     host_permissions: ['https://mail.google.com/*', `${apiOrigin}/*`],
-    commands: {
-      'focus-format-command': {
-        suggested_key: { default: 'Alt+Shift+M', mac: 'Alt+Shift+M' },
-        description: 'Open the Wispr formatting command box',
-      },
-    },
     side_panel: { default_path: 'sidepanel.html' },
     icons: { 16: 'icons/icon-16.png', 48: 'icons/icon-48.png', 128: 'icons/icon-128.png' },
   },

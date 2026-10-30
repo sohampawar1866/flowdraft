@@ -1,5 +1,5 @@
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, composeBodyText, isFlowDraftDictation, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, newBlankComposeElements, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback, fillComposeWindow } from '@/lib/gmail-dom';
-import type { ApplyFormatMessage, ApplyVoiceResultMessage, CapturedDictationMessage, FillDraftMessage, ListComposeMessage, VoiceStatusMessage } from '@/lib/messages';
+import { applyVoiceDraft, captureComposeId, composeBodyText, isFlowDraftDictation, isNewComposeReadyForDictation, isWisprStyleInsertion, newBlankComposeElements, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from '@/lib/gmail-dom';
+import type { ApplyVoiceResultMessage, CapturedDictationMessage, VoiceStatusMessage } from '@/lib/messages';
 
 const DICTATION_QUIET_MS = 1100;
 const PASTE_INSERTION_WINDOW_MS = 2000;
@@ -61,18 +61,6 @@ export default defineContentScript({
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
     chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-      if (isListCompose(message)) {
-        sendResponse({ windows: listComposeWindows() });
-        return;
-      }
-      if (isFillDraft(message)) {
-        sendResponse(fillComposeWindow(message.composeIndex, message.draft));
-        return;
-      }
-      if (isApplyFormat(message)) {
-        sendResponse(applyGmailFormatting(message.composeIndex, message.format, message.occurrenceIndex));
-        return;
-      }
       if (isApplyVoiceResult(message)) {
         void applyVoiceDraft(message.composeId, message.transcript, message.result).then(sendResponse);
         return true;
@@ -96,18 +84,8 @@ function composeElementsForStatus(): HTMLElement[] {
   );
 }
 
-function isListCompose(value: unknown): value is ListComposeMessage {
-  return typeof value === 'object' && value !== null && 'type' in value && value.type === 'LIST_COMPOSES';
-}
-
 function isApplyVoiceResult(value: unknown): value is ApplyVoiceResultMessage {
   return typeof value === 'object' && value !== null && 'type' in value && value.type === 'APPLY_VOICE_RESULT';
-}
-function isFillDraft(value: unknown): value is FillDraftMessage {
-  return typeof value === 'object' && value !== null && 'type' in value && value.type === 'FILL_DRAFT';
-}
-function isApplyFormat(value: unknown): value is ApplyFormatMessage {
-  return typeof value === 'object' && value !== null && 'type' in value && value.type === 'APPLY_FORMAT';
 }
 function isVoiceStatus(value: unknown): value is VoiceStatusMessage {
   return typeof value === 'object' && value !== null && 'type' in value && value.type === 'VOICE_STATUS'

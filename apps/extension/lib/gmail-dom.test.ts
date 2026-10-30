@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
+import { applyGmailFormatting, applyVoiceDraft, captureComposeId, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, isWisprStyleInsertion, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
 function createCompose({ recipient = '', subject = '', body = '', recipientDisplay = '', recipientCommitDelayMs = 0, recipientCommitAs = '', recipientInputRemainsAfterCommit = false }: { recipient?: string; subject?: string; body?: string; recipientDisplay?: string; recipientCommitDelayMs?: number; recipientCommitAs?: string; recipientInputRemainsAfterCommit?: boolean } = {}) {
@@ -59,30 +59,6 @@ describe('Gmail compose bridge', () => {
     expect(isWisprStyleInsertion(new InputEvent('beforeinput', { inputType: 'insertText', data: 'A long dictated sentence inserted at once.' }))).toBe(true);
     expect(isWisprStyleInsertion(new InputEvent('beforeinput', { inputType: 'insertText', data: 'a' }))).toBe(false);
     expect(isWisprStyleInsertion(new InputEvent('input', { inputType: 'insertText', data: 'a' }), true)).toBe(true);
-  });
-
-  it('fills the chosen compose fields and never clicks Send', () => {
-    const dialog = createCompose();
-    const send = dialog.querySelector('button')!;
-    const click = vi.spyOn(send, 'click');
-    const result = fillComposeWindow(0, { recipient: 'sam@example.com', subject: 'Update', body: 'First line\nSecond line' });
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')!.textContent).toContain('sam@example.com');
-    expect(dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!.value).toBe('');
-    expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
-    expect(dialog.querySelector('[aria-label="Message Body"]')!.textContent).toContain('First line');
-    expect(dialog.querySelector('[aria-label="Message Body"]')!.textContent).toContain('Second line');
-    expect(click).not.toHaveBeenCalled();
-  });
-
-  it('lists multiple compose windows and indicates the currently focused one', () => {
-    createCompose({ recipient: 'one@example.com' });
-    const activeCompose = createCompose({ recipient: 'two@example.com' });
-    activeCompose.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.focus();
-    expect(listComposeWindows()).toEqual([
-      { index: 0, recipient: 'one@example.com', subject: '', active: false },
-      { index: 1, recipient: 'two@example.com', subject: '', active: true },
-    ]);
   });
 
   it('does not change content when a phrase is missing or appears ambiguously', () => {
@@ -145,12 +121,6 @@ describe('Gmail compose bridge', () => {
     expect(applyGmailFormatting(0, format).ok).toBe(true);
     expect(document.execCommand).toHaveBeenCalledWith('justifyCenter');
     expect(document.getSelection()?.toString()).toBe('The line I just spoke.');
-  });
-
-  it('reports when the requested Gmail draft is not available', () => {
-    expect(fillComposeWindow(0, { recipient: 'a@example.com', subject: 'Hi', body: 'Hello' })).toEqual({
-      ok: false, reason: 'That compose window is no longer open. Reopen the draft picker and try again.',
-    });
   });
 
   it('recognizes natural email intent without requiring a subject cue, and ignores ordinary text', () => {

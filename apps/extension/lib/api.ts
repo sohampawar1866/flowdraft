@@ -1,11 +1,10 @@
-import { EmailParseResponse, FormatParseResponse, UsageResponse, VoiceParseResponse, type EmailParseResponse as EmailParseResult, type FormatParseResponse as FormatParseResult, type VoiceParseResponse as VoiceParseResult } from '@flowdraft/contracts';
+import { FormatParseResponse, UsageResponse, VoiceParseResponse, type FormatParseResponse as FormatParseResult, type VoiceParseResponse as VoiceParseResult } from '@flowdraft/contracts';
 import { z } from 'zod';
 
 declare const __WISPR_API_BASE_URL__: string;
 
-export { EmailParseResponse, FormatParseResponse } from '@flowdraft/contracts';
-export { VoiceParseResponse, UsageResponse } from '@flowdraft/contracts';
-export type { EmailParseResult, FormatParseResult, VoiceParseResult };
+export { FormatParseResponse, VoiceParseResponse, UsageResponse } from '@flowdraft/contracts';
+export type { FormatParseResult, VoiceParseResult };
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly requestsRemaining?: number) {
@@ -36,10 +35,6 @@ async function post<T>(path: string, body: object, schema: z.ZodType<T>): Promis
 }
 
 export const api = {
-  parseEmail: (installationId: string, transcript: string) =>
-    post('/v1/email/parse', { installationId, transcript }, EmailParseResponse),
-  parseFormat: (installationId: string, instruction: string) =>
-    post('/v1/format/parse', { installationId, instruction }, FormatParseResponse),
   parseVoice: (installationId: string, transcript: string) =>
     post('/v1/voice/parse', { installationId, transcript }, VoiceParseResponse),
   getUsage: (installationId: string) =>

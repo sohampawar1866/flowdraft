@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["chrome", "vite/client"]
   },
-  "include": [".wxt/**/*.ts", "entrypoints/**/*.ts", "entrypoints/**/*.tsx", "components/**/*.tsx", "lib/**/*.ts", "wxt.config.ts", "vitest.config.ts"]
+  "include": [".wxt/**/*.ts", "entrypoints/**/*.ts", "entrypoints/**/*.tsx", "lib/**/*.ts", "wxt.config.ts", "vitest.config.ts"]
 }
