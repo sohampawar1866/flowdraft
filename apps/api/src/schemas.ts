@@ -46,10 +46,18 @@ export type EmailResult = z.infer<typeof emailResultSchema>;
 export type FormatResult = z.infer<typeof formatResultSchema>;
 export type VoiceResult = z.infer<typeof voiceResultSchema>;
 
+function capitalizeSubjectStart(subject: string | null): string | null {
+  if (!subject) return subject;
+  const firstLetter = /\p{L}/u.exec(subject);
+  if (!firstLetter || firstLetter.index === undefined) return subject;
+  const index = firstLetter.index;
+  return subject.slice(0, index) + firstLetter[0].toUpperCase() + subject.slice(index + firstLetter[0].length);
+}
+
 export function normalizeEmailResult(value: unknown): EmailResult | null {
   const parsed = emailResultSchema.safeParse(value);
   if (!parsed.success) return null;
-  let result = parsed.data;
+  let result = { ...parsed.data, subject: capitalizeSubjectStart(parsed.data.subject) };
   if (result.recipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result.recipient)) {
     result = { ...result, recipient: null, clarification: result.clarification ?? 'Please dictate the recipient’s complete email address.' };
   }
@@ -84,7 +92,7 @@ export function normalizeVoiceResult(value: unknown, transcript: string): VoiceR
   let result = {
     ...parsed.data,
     recipient: parsed.data.recipient?.trim() || null,
-    subject: parsed.data.subject?.trim() || null,
+    subject: capitalizeSubjectStart(parsed.data.subject?.trim() || null),
     body: parsed.data.body?.trim() || null,
   };
   if (/\bhey\s+wispr(?:\s+flow)?\b/i.test(result.body ?? '')) {
