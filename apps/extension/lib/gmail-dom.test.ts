@@ -317,6 +317,25 @@ describe('Gmail compose bridge', () => {
     expect(dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')?.value).toBe('');
   });
 
+  it('commits one dictated recipient with one Enter event and creates one chip', async () => {
+    const dialog = createCompose();
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const input = dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!;
+    const transcript = 'Send mail to sam@example.com. Topic update. Message Hello.';
+    body.textContent = transcript;
+    const dispatchEvent = vi.spyOn(input, 'dispatchEvent');
+
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult);
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(dispatchEvent.mock.calls.map(([event]) => event.type).filter((type) => type === 'keydown')).toHaveLength(1);
+    expect(dispatchEvent.mock.calls.map(([event]) => event.type)).not.toContain('keyup');
+    expect(dialog.querySelectorAll('[name="to"] [role="option"][data-hovercard-id="sam@example.com"]')).toHaveLength(1);
+  });
+
   it('leaves subject and transcript untouched when recipient verification fails', async () => {
     const dialog = createCompose({ recipientDisplay: 'Different Contact', recipientCommitAs: 'other@example.com' });
     dialog.dataset.flowdraftCaptureReady = 'true';

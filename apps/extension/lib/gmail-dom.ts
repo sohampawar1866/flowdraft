@@ -376,8 +376,10 @@ function commitRecipient(compose: HTMLElement, recipient: string): boolean {
   const input = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
   if (!input || !setField(compose, RECIPIENT_INPUT_SELECTOR, recipient)) return false;
   input.focus();
+  // Gmail commits recipients from its Enter keydown handler. Dispatching a
+  // synthetic keyup as well is unnecessary and can make some Gmail builds
+  // process the same autocomplete choice twice. Keep this to one commit event.
   input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-  input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
   return true;
 }
 
