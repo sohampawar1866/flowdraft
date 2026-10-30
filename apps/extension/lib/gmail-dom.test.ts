@@ -3,26 +3,33 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
-function createCompose({ recipient = '', subject = '', body = '', recipientDisplay = '' }: { recipient?: string; subject?: string; body?: string; recipientDisplay?: string } = {}) {
+function createCompose({ recipient = '', subject = '', body = '', recipientDisplay = '', recipientCommitDelayMs = 0, recipientCommitAs = '' }: { recipient?: string; subject?: string; body?: string; recipientDisplay?: string; recipientCommitDelayMs?: number; recipientCommitAs?: string } = {}) {
   const dialog = document.createElement('div');
   dialog.setAttribute('role', 'dialog');
-  dialog.innerHTML = `<div role="heading">Compose: New Message</div><div name="to" aria-label="To"><input role="combobox" aria-label="To recipients"></div><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
+  // Sanitized fixture based on the live Gmail PeopleKit structure: the
+  // recipient chip and input share a nested wrapper under [name="to"].
+  dialog.innerHTML = `<div role="heading">Compose: New Message</div><div name="to" aria-label="To"><div class="aUy"><div class="afp"><div class="afx" role="listbox" aria-multiselectable="true"><div class="agh"><div class="agb"></div></div></div><div class="aH9"><input role="combobox" aria-label="To recipients"></div></div></div></div><input name="subjectbox" value="${subject}"><div aria-label="Message Body" contenteditable="true"></div><button>Send</button>`;
   const recipientContainer = dialog.querySelector<HTMLElement>('[name="to"]')!;
+  const chipList = dialog.querySelector<HTMLElement>('.agb')!;
   const recipientInput = dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!;
   if (recipient) {
-    const chip = document.createElement('span');
-    chip.dataset.recipientChip = 'true';
-    chip.textContent = recipient;
-    recipientContainer.prepend(chip);
+    const chip = createRecipientChip(recipient, recipientDisplay || recipient);
+    chipList.append(chip);
   }
   recipientInput.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || !recipientInput.value) return;
-    const chip = document.createElement('span');
-    chip.dataset.recipientChip = 'true';
-    chip.setAttribute('email', recipientInput.value);
-    chip.textContent = recipientDisplay || recipientInput.value;
-    recipientContainer.insertBefore(chip, recipientInput);
-    recipientInput.value = '';
+    const commit = () => {
+      const chip = createRecipientChip(recipientCommitAs || recipientInput.value, recipientDisplay || recipientInput.value);
+      chipList.append(chip);
+      recipientInput.value = '';
+    };
+    if (recipientCommitDelayMs) window.setTimeout(commit, recipientCommitDelayMs);
+    else commit();
+  });
+  recipientInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Backspace' || recipientInput.value) return;
+    const chips = chipList.querySelectorAll('[role="option"]');
+    chips.item(chips.length - 1)?.remove();
   });
   const messageBody = dialog.querySelector('[aria-label="Message Body"]')!;
   for (const line of body.split('\n')) {
@@ -32,6 +39,15 @@ function createCompose({ recipient = '', subject = '', body = '', recipientDispl
   }
   document.body.append(dialog);
   return dialog;
+}
+
+function createRecipientChip(email: string, display: string): HTMLElement {
+  const chip = document.createElement('div');
+  chip.setAttribute('role', 'option');
+  chip.setAttribute('data-hovercard-id', email);
+  chip.setAttribute('data-name', display);
+  chip.innerHTML = `<div class="afT"><div class="afZ"><span>${display}</span></div></div><div aria-hidden="true" aria-label="Press delete to remove this chip"></div>`;
+  return chip;
 }
 
 beforeEach(() => { document.body.replaceChildren(); });
@@ -50,8 +66,8 @@ describe('Gmail compose bridge', () => {
     const send = dialog.querySelector('button')!;
     const click = vi.spyOn(send, 'click');
     const result = fillComposeWindow(0, { recipient: 'sam@example.com', subject: 'Update', body: 'First line\nSecond line' });
-    expect(result.ok).toBe(true);
-    expect(dialog.querySelector('[name="to"] [data-recipient-chip]')!.textContent).toBe('sam@example.com');
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')!.textContent).toContain('sam@example.com');
     expect(dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!.value).toBe('');
     expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
     expect(dialog.querySelector('[aria-label="Message Body"]')!.textContent).toContain('First line');
@@ -263,8 +279,8 @@ describe('Gmail compose bridge', () => {
       requestsRemaining: 24,
     } satisfies VoiceParseResult;
     const result = await applyVoiceDraft(composeId, transcript, response);
-    expect(result.ok).toBe(true);
-    expect(dialog.querySelector('[name="to"] [data-recipient-chip]')!.textContent).toBe('sam@example.com');
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')!.textContent).toContain('sam@example.com');
     expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('Update');
     expect(body.textContent).toContain('Quarterly update');
     expect(body.textContent).not.toContain('Hey Wispr');
@@ -281,9 +297,83 @@ describe('Gmail compose bridge', () => {
       recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
     } satisfies VoiceParseResult;
     const result = await applyVoiceDraft(captureComposeId(dialog), transcript, response);
-    expect(result.ok).toBe(true);
-    expect(dialog.querySelector('[name="to"] [data-recipient-chip]')?.textContent).toBe('Soham Pawar (gmail.com)');
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')?.textContent).toContain('Soham Pawar (gmail.com)');
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')?.getAttribute('data-hovercard-id')).toBe('sam@example.com');
     expect(body.textContent).toBe('Hello');
+  });
+
+  it('confirms the exact address from a nested Gmail recipient chip after delayed commit', async () => {
+    const dialog = createCompose({ recipientDisplay: 'Soham Pawar (gmail.com)', recipientCommitDelayMs: 140 });
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const transcript = 'Send mail to sam@example.com. Topic update. Message Hello.';
+    body.textContent = transcript;
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult);
+    expect(result.ok).toBe(true);
+    expect(dialog.querySelector('[name="to"] .aUy [role="option"]')?.getAttribute('data-hovercard-id')).toBe('sam@example.com');
+    expect(dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')?.value).toBe('');
+  });
+
+  it('removes a mismatched nested recipient through Gmail input handling and restores the transcript', async () => {
+    const dialog = createCompose({ recipientDisplay: 'Different Contact', recipientCommitAs: 'other@example.com' });
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const transcript = 'Send mail to sam@example.com. Topic update. Message Hello.';
+    body.textContent = transcript;
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a recipient verification failure.');
+    expect(result.reason).toContain('recipient');
+    expect(result.reason).toContain('restored your dictated text');
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')).toBeNull();
+    expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')?.value).toBe('');
+    expect(body.textContent).toBe(transcript);
+  });
+
+  it('reports which fields Gmail failed to confirm and restores all fields after a body write failure', async () => {
+    const dialog = createCompose();
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const transcript = 'Send mail to sam@example.com. Topic update. Message Hello.';
+    body.textContent = transcript;
+    body.replaceChildren = () => undefined;
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a message verification failure.');
+    expect(result.reason).toContain('message');
+    expect(result.reason).toContain('restored your dictated text');
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')).toBeNull();
+    expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')?.value).toBe('');
+    expect(body.textContent).toBe(transcript);
+  });
+
+  it('restores recipient and message when Gmail rejects the subject update', async () => {
+    const dialog = createCompose();
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const subject = dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!;
+    const transcript = 'Send mail to sam@example.com. Topic update. Message Hello.';
+    body.textContent = transcript;
+    subject.addEventListener('input', () => {
+      if (subject.value === 'Update') subject.value = '';
+    });
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a subject verification failure.');
+    expect(result.reason).toContain('subject');
+    expect(result.reason).toContain('restored your dictated text');
+    expect(dialog.querySelector('[name="to"] [role="option"][data-hovercard-id]')).toBeNull();
+    expect(subject.value).toBe('');
+    expect(body.textContent).toBe(transcript);
   });
 
   it('leaves Gmail untouched if the user changed the pasted text during AI processing', async () => {
@@ -300,7 +390,7 @@ describe('Gmail compose bridge', () => {
     expect(dialog.innerHTML).toBe(before);
   });
 
-  it('restores the original transcript if Gmail does not commit all draft fields', async () => {
+  it('reports a partial restore if Gmail removes the recipient control during processing', async () => {
     const dialog = createCompose();
     dialog.dataset.flowdraftCaptureReady = 'true';
     const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
@@ -314,6 +404,9 @@ describe('Gmail compose bridge', () => {
     input.replaceWith(Object.assign(document.createElement('input'), { name: 'different-recipient-field' }));
     const result = await applyVoiceDraft(composeId, transcript, response);
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected the unavailable recipient control to be reported.');
+    expect(result.reason).toContain('could not verify a full restore');
+    expect(result.reason).not.toContain('restored your dictated text');
     expect(body.textContent).toBe(transcript);
     expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')!.value).toBe('');
   });

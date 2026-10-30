@@ -5,6 +5,8 @@ const COMPOSE_SELECTOR = '[role="dialog"]';
 const BODY_SELECTOR = '[aria-label="Message Body"][contenteditable="true"], [contenteditable="true"][g_editable="true"]';
 const RECIPIENT_CONTAINER_SELECTOR = '[name="to"]';
 const RECIPIENT_INPUT_SELECTOR = 'input[name="to"], input[aria-label="To recipients"], [name="to"] input[role="combobox"], [name="to"] input';
+const RECIPIENT_CHIP_SELECTOR = '[role="listbox"][aria-multiselectable="true"] [role="option"][data-hovercard-id], [role="listbox"][aria-multiselectable="true"] [role="option"][email], [role="listbox"][aria-multiselectable="true"] [role="option"][data-email]';
+const DRAFT_CONFIRMATION_DELAYS_MS = [0, 80, 180, 360, 650];
 
 function composeElements(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(COMPOSE_SELECTOR)).filter((dialog) =>
@@ -227,27 +229,21 @@ export async function applyVoiceDraft(composeId: string, transcript: string, res
   const index = composeElements().indexOf(compose);
   const filled = fillComposeWindow(index, { recipient: result.recipient, subject: result.subject, body: result.body });
   if (!filled.ok) {
-    const restored = await restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient, transcript);
+    const restored = await restoreVoiceCompose(compose, originalBody, originalSubject, transcript);
     return { ok: false, reason: restored
       ? `${filled.reason} Generated fields were cleared and your dictated text was restored.`
       : `${filled.reason} I could not verify a full restore. Review the draft carefully; nothing was sent.` };
   }
 
-  // Let Gmail's own event handlers commit the recipient chip before checking
-  // the rendered compose. A successful DOM write alone is not confirmation.
-  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-  const recipientContainer = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
-  const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
-  const appliedBody = compose.querySelector<HTMLElement>(BODY_SELECTOR);
-  const committedRecipient = recipientContainer && recipientInput
-    ? isRecipientCommitted(recipientContainer, recipientInput, result.recipient!)
-    : false;
-  if (!committedRecipient || subject.value !== result.subject
-    || !appliedBody || normalizeText(composeBodyText(appliedBody)) !== normalizeText(result.body)) {
-    const restored = await restoreVoiceCompose(compose, originalBody, originalSubject, result.recipient!, transcript);
+  // Gmail updates its own compose state asynchronously. Confirm the rendered
+  // recipient chip, subject, and body over a short settling window rather than
+  // treating the initial DOM write as success or failing on the first frame.
+  const applied = await waitForDraftState(compose, result.recipient!, result.subject, result.body);
+  if (!applied.ok) {
+    const restored = await restoreVoiceCompose(compose, originalBody, originalSubject, transcript);
     return { ok: false, reason: restored
-      ? 'Gmail did not confirm the draft fields. I cleared the generated fields and restored your dictated text; you can retry.'
-      : 'Gmail did not confirm the draft fields, and I could not verify a full restore. Review the recipient, subject, and message carefully. Nothing was sent.' };
+      ? `Gmail did not confirm the ${unconfirmedFields(applied).join(', ')}. I cleared the generated fields and restored your dictated text; you can retry.`
+      : `Gmail did not confirm the ${unconfirmedFields(applied).join(', ')}, and I could not verify a full restore. Review the recipient, subject, and message carefully. Nothing was sent.` };
   }
 
   const skipped: string[] = [];
@@ -262,34 +258,18 @@ export async function applyVoiceDraft(composeId: string, transcript: string, res
 
 function isRecipientCommitted(container: HTMLElement, input: HTMLInputElement, recipient: string): boolean {
   if (input.value.trim()) return false;
-  const nodes = Array.from(container.querySelectorAll<HTMLElement>('*'))
-    .filter((node) => !node.contains(input) && node !== input);
-  const addressInMetadata = nodes.some((node) =>
-    ['email', 'data-email', 'data-hovercard-id', 'title', 'aria-label']
-      .some((attribute) => node.getAttribute(attribute)?.toLowerCase().includes(recipient.toLowerCase())),
-  );
-  if (addressInMetadata) return true;
-
-  // Gmail often replaces an address with a contact chip whose visible label is
-  // a person's name. Since the compose was blank before insertion, a committed
-  // non-empty chip plus an empty recipient input confirms the token was added.
-  return Array.from(container.children).some((child) =>
-    !child.contains(input) && Boolean(child.textContent?.trim()),
-  );
+  const normalizedRecipient = normalizeEmail(recipient);
+  // In live Gmail the chip is a role=option nested several wrappers below
+  // [name="to"]. Gmail places its exact address in data-hovercard-id even when
+  // the visible chip only shows a contact name and provider.
+  const chips = Array.from(container.querySelectorAll<HTMLElement>(RECIPIENT_CHIP_SELECTOR));
+  return chips.some((chip) => recipientMetadata(chip).some((value) => normalizeEmail(value) === normalizedRecipient));
 }
 
-async function restoreVoiceCompose(compose: HTMLElement, originalBody: string, originalSubject: string, recipient: string, transcript: string): Promise<boolean> {
+async function restoreVoiceCompose(compose: HTMLElement, originalBody: string, originalSubject: string, transcript: string): Promise<boolean> {
   const recipientContainer = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
   const recipientInput = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
-  if (recipientInput) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-    setter?.call(recipientInput, '');
-    recipientInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    recipientInput.dispatchEvent(new Event('change', { bubbles: true }));
-    for (const child of Array.from(recipientContainer?.children ?? [])) {
-      if (!child.contains(recipientInput) && child.textContent?.trim()) child.remove();
-    }
-  }
+  if (recipientContainer && recipientInput) await removeCommittedRecipientThroughInput(recipientContainer, recipientInput);
   setField(compose, 'input[name="subjectbox"], [name="subjectbox"]', originalSubject);
   const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
   if (body) {
@@ -297,14 +277,63 @@ async function restoreVoiceCompose(compose: HTMLElement, originalBody: string, o
     body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: composeBodyText(body) }));
     body.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-  const restoredSubject = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
-  const restoredBody = compose.querySelector<HTMLElement>(BODY_SELECTOR);
-  const noRecipientToken = Boolean(recipientContainer && (!recipientInput || !recipientInput.value.trim())
-    && !Array.from(recipientContainer.children).some((child) => !child.contains(recipientInput) && child.textContent?.trim()));
-  return noRecipientToken && restoredSubject?.value === originalSubject && Boolean(restoredBody)
-    && normalizeText(composeBodyText(restoredBody!)) === normalizeText(transcript);
+  const restored = await waitForDraftState(compose, null, originalSubject, transcript);
+  return restored.ok;
 }
+
+async function removeCommittedRecipientThroughInput(container: HTMLElement, input: HTMLInputElement): Promise<void> {
+  // The prototype only applies to a compose verified blank before parsing, so
+  // any committed token here was added by this operation. Use Gmail's own
+  // recipient-input keyboard handling; never remove nested chip DOM nodes.
+  const hasGeneratedChip = () => container.querySelector(RECIPIENT_CHIP_SELECTOR) !== null;
+  input.focus();
+  for (let attempt = 0; attempt < 4 && hasGeneratedChip(); attempt += 1) {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
+    await delay(60);
+  }
+}
+
+function recipientMetadata(chip: HTMLElement): string[] {
+  return ['data-hovercard-id', 'email', 'data-email']
+    .map((attribute) => chip.getAttribute(attribute)?.trim() ?? '')
+    .filter(Boolean);
+}
+
+function normalizeEmail(value: string): string { return value.trim().replace(/^mailto:/i, '').toLowerCase(); }
+
+async function waitForDraftState(compose: HTMLElement, recipient: string | null, subject: string, bodyText: string): Promise<DraftStateCheck> {
+  let check: DraftStateCheck = { ok: false, recipient: recipient === null, subject: false, body: false };
+  for (const waitMs of DRAFT_CONFIRMATION_DELAYS_MS) {
+    if (waitMs) await delay(waitMs - (DRAFT_CONFIRMATION_DELAYS_MS[DRAFT_CONFIRMATION_DELAYS_MS.indexOf(waitMs) - 1] ?? 0));
+    const container = compose.querySelector<HTMLElement>(RECIPIENT_CONTAINER_SELECTOR);
+    const input = compose.querySelector<HTMLInputElement>(RECIPIENT_INPUT_SELECTOR);
+    const subjectField = compose.querySelector<HTMLInputElement>('input[name="subjectbox"], [name="subjectbox"]');
+    const body = compose.querySelector<HTMLElement>(BODY_SELECTOR);
+    check = {
+      ok: false,
+      recipient: recipient === null
+        ? Boolean(container && input && !input.value.trim() && !container.querySelector(RECIPIENT_CHIP_SELECTOR))
+        : Boolean(container && input && isRecipientCommitted(container, input, recipient)),
+      subject: subjectField?.value === subject,
+      body: Boolean(body && normalizeText(composeBodyText(body)) === normalizeText(bodyText)),
+    };
+    if (check.recipient && check.subject && check.body) return { ...check, ok: true };
+  }
+  return check;
+}
+
+interface DraftStateCheck { ok: boolean; recipient: boolean; subject: boolean; body: boolean }
+
+function unconfirmedFields(check: DraftStateCheck): string[] {
+  const fields: string[] = [];
+  if (!check.recipient) fields.push('recipient');
+  if (!check.subject) fields.push('subject');
+  if (!check.body) fields.push('message');
+  return fields.length ? fields : ['draft'];
+}
+
+function delay(ms: number): Promise<void> { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
 
 function normalizeText(text: string): string { return text.replace(/\s+/g, ' ').trim(); }
 
