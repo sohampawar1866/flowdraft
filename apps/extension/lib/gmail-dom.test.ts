@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyGmailFormatting, applyVoiceDraft, captureComposeId, fillComposeWindow, focusNewComposeBody, isFlowDraftDictation, isNewBlankCompose, isNewComposeReadyForDictation, isWisprStyleInsertion, listComposeWindows, retryFocusNewCompose, showComposeVoiceStatus, showFocusFallback } from './gmail-dom';
 import type { VoiceParseResult } from './api';
 
-function createCompose({ recipient = '', subject = '', body = '', recipientDisplay = '', recipientCommitDelayMs = 0, recipientCommitAs = '' }: { recipient?: string; subject?: string; body?: string; recipientDisplay?: string; recipientCommitDelayMs?: number; recipientCommitAs?: string } = {}) {
+function createCompose({ recipient = '', subject = '', body = '', recipientDisplay = '', recipientCommitDelayMs = 0, recipientCommitAs = '', recipientInputRemainsAfterCommit = false }: { recipient?: string; subject?: string; body?: string; recipientDisplay?: string; recipientCommitDelayMs?: number; recipientCommitAs?: string; recipientInputRemainsAfterCommit?: boolean } = {}) {
   const dialog = document.createElement('div');
   dialog.setAttribute('role', 'dialog');
   // Sanitized fixture based on the live Gmail PeopleKit structure: the
@@ -21,7 +21,7 @@ function createCompose({ recipient = '', subject = '', body = '', recipientDispl
     const commit = () => {
       const chip = createRecipientChip(recipientCommitAs || recipientInput.value, recipientDisplay || recipientInput.value);
       chipList.append(chip);
-      recipientInput.value = '';
+      if (!recipientInputRemainsAfterCommit) recipientInput.value = '';
     };
     if (recipientCommitDelayMs) window.setTimeout(commit, recipientCommitDelayMs);
     else commit();
@@ -334,6 +334,24 @@ describe('Gmail compose bridge', () => {
     expect(dispatchEvent.mock.calls.map(([event]) => event.type).filter((type) => type === 'keydown')).toHaveLength(1);
     expect(dispatchEvent.mock.calls.map(([event]) => event.type)).not.toContain('keyup');
     expect(dialog.querySelectorAll('[name="to"] [role="option"][data-hovercard-id="sam@example.com"]')).toHaveLength(1);
+  });
+
+  it('clears a leftover address from the input when Gmail already committed its matching chip', async () => {
+    const dialog = createCompose({ recipientDisplay: 'Soham Pawar (gmail.com) sam@example.com', recipientInputRemainsAfterCommit: true });
+    dialog.dataset.flowdraftCaptureReady = 'true';
+    const body = dialog.querySelector<HTMLElement>('[aria-label="Message Body"]')!;
+    const input = dialog.querySelector<HTMLInputElement>('[aria-label="To recipients"]')!;
+    const transcript = 'Send mail to sam@example.com. Topic update. Message Hello.';
+    body.textContent = transcript;
+
+    const result = await applyVoiceDraft(captureComposeId(dialog), transcript, {
+      recipient: 'sam@example.com', subject: 'Update', body: 'Hello', formatting: [], clarification: null, requestsRemaining: 24,
+    } satisfies VoiceParseResult);
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(dialog.querySelectorAll('[name="to"] [role="option"][data-hovercard-id="sam@example.com"]')).toHaveLength(1);
+    expect(input.value).toBe('');
+    expect(dialog.querySelector<HTMLInputElement>('input[name="subjectbox"]')?.value).toBe('Update');
   });
 
   it('leaves subject and transcript untouched when recipient verification fails', async () => {

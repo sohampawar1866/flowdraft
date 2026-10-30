@@ -272,21 +272,34 @@ export async function applyVoiceDraft(composeId: string, transcript: string, res
 }
 
 function isRecipientCommitted(container: HTMLElement, input: HTMLInputElement, recipient: string): boolean {
-  if (input.value.trim()) return false;
   const normalizedRecipient = normalizeEmail(recipient);
-  // In live Gmail the chip is a role=option nested several wrappers below
-  // [name="to"]. Gmail's rendering can expose the address as chip metadata,
-  // or as visible text next to the saved-contact label. The input must be
-  // empty in either case so a still-typed autocomplete query is never treated
-  // as a committed recipient.
+  // Gmail can commit a saved contact chip while leaving the same address in
+  // the recipient input. The chip and the input then look like two recipients
+  // and the old check rejected the valid chip. Confirm the address on the
+  // rendered chip first; if the input is only the exact same address, clear
+  // that duplicate query through the input's normal events and verify again.
   const chips = Array.from(container.querySelectorAll<HTMLElement>(RECIPIENT_CHIP_SELECTOR));
-  if (chips.some((chip) => recipientMetadata(chip).some((value) => normalizeEmail(value) === normalizedRecipient))) return true;
+  const hasMatchingChip = chips.some((chip) => recipientHasAddress(chip, normalizedRecipient));
+  if (!hasMatchingChip) return false;
 
-  const renderedAddresses = Array.from(
-    (container.innerText ?? container.textContent ?? '').matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi),
+  const pendingAddress = input.value.trim();
+  if (pendingAddress) {
+    if (normalizeEmail(pendingAddress) !== normalizedRecipient) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, '');
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return false;
+  }
+  return true;
+}
+
+function recipientHasAddress(chip: HTMLElement, normalizedRecipient: string): boolean {
+  if (recipientMetadata(chip).some((value) => normalizeEmail(value) === normalizedRecipient)) return true;
+  return Array.from(
+    (chip.innerText ?? chip.textContent ?? '').matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi),
     (match) => normalizeEmail(match[0]),
-  );
-  return renderedAddresses.includes(normalizedRecipient);
+  ).includes(normalizedRecipient);
 }
 
 async function restoreVoiceCompose(compose: HTMLElement, originalBody: string, originalSubject: string, transcript: string, confirmedRecipient: string): Promise<boolean> {
